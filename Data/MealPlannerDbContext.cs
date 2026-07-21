@@ -16,9 +16,8 @@ public class MealPlannerDbContext : DbContext
     {
         modelBuilder.Entity<InventoryItem>(entity =>
         {
-            // Store enums as readable text so the DB is legible and Claude's
+            // Store the enum as readable text so the DB is legible and Claude's
             // MCP tool calls map cleanly to string values.
-            entity.Property(e => e.Quantity).HasConversion<string>();
             entity.Property(e => e.Category).HasConversion<string>();
 
             // One row per ingredient name (case-insensitive) keeps inventory tidy.

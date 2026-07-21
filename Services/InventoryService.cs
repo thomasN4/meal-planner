@@ -21,19 +21,23 @@ public enum ChangeKind
 public record InventoryChange(
     string Name,
     ChangeKind Kind,
-    StockLevel? Before,
-    StockLevel? After,
+    string? Before,
+    string? After,
     IngredientCategory Category)
 {
     public string Describe() => Kind switch
     {
+        ChangeKind.Created when string.IsNullOrEmpty(After) => $"Added \"{Name}\" to {Category}",
         ChangeKind.Created => $"Added \"{Name}\" ({After}) to {Category}",
-        ChangeKind.Updated => $"\"{Name}\": {Before} → {After}",
+        ChangeKind.Updated => $"\"{Name}\": {Display(Before)} → {Display(After)}",
         ChangeKind.Removed => $"Removed \"{Name}\"",
-        ChangeKind.Unchanged => $"\"{Name}\" unchanged ({After})",
+        ChangeKind.Unchanged => $"\"{Name}\" unchanged ({Display(After)})",
         ChangeKind.NotFound => $"\"{Name}\" not found",
         _ => Name,
     };
+
+    private static string Display(string? quantity) =>
+        string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
 }
 
 /// <summary>
@@ -48,6 +52,7 @@ public class InventoryService
     // lengths, so the service is the trust boundary — especially for values
     // arriving from Claude's MCP tools rather than the constrained UI form.
     private const int MaxNameLength = 100;
+    private const int MaxQuantityLength = 50;
     private const int MaxNotesLength = 500;
 
     private readonly IDbContextFactory<MealPlannerDbContext> _factory;
@@ -65,6 +70,14 @@ public class InventoryService
             throw new ArgumentException("Ingredient name must not be empty.", nameof(name));
         }
         return name.Length <= MaxNameLength ? name : name[..MaxNameLength].TrimEnd();
+    }
+
+    private static string NormalizeQuantity(string? quantity)
+    {
+        quantity = quantity?.Trim() ?? string.Empty;
+        return quantity.Length <= MaxQuantityLength
+            ? quantity
+            : quantity[..MaxQuantityLength].TrimEnd();
     }
 
     private static string? NormalizeNotes(string? notes) =>
@@ -101,12 +114,13 @@ public class InventoryService
     /// </summary>
     public async Task<InventoryChange> UpsertAsync(
         string name,
-        StockLevel quantity,
+        string quantity = "",
         IngredientCategory? category = null,
         string? notes = null,
         CancellationToken ct = default)
     {
         name = NormalizeName(name);
+        quantity = NormalizeQuantity(quantity);
         notes = NormalizeNotes(notes);
 
         // Read-then-write races once and retries: the second attempt sees the
@@ -125,7 +139,7 @@ public class InventoryService
 
     private async Task<InventoryChange> UpsertOnceAsync(
         string name,
-        StockLevel quantity,
+        string quantity,
         IngredientCategory? category,
         string? notes,
         CancellationToken ct)
@@ -195,6 +209,7 @@ public class InventoryService
     public async Task SaveAsync(InventoryItem item, CancellationToken ct = default)
     {
         item.Name = NormalizeName(item.Name);
+        item.Quantity = NormalizeQuantity(item.Quantity);
         item.Notes = NormalizeNotes(item.Notes);
         item.UpdatedAt = DateTime.UtcNow;
         await using var db = await _factory.CreateDbContextAsync(ct);

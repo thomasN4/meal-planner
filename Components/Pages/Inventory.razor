@@ -28,13 +28,9 @@
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="form-label mb-1">Stock</label>
-                <select class="form-select" @bind="newQuantity">
-                    @foreach (var q in Enum.GetValues<StockLevel>())
-                    {
-                        <option value="@q">@q</option>
-                    }
-                </select>
+                <label class="form-label mb-1">Quantity</label>
+                <input class="form-control" placeholder="e.g. 2 bags"
+                       @bind="newQuantity" maxlength="50" />
             </div>
             <div class="col-md-2">
                 <button class="btn btn-primary w-100" @onclick="AddAsync"
@@ -64,14 +60,10 @@ else
                     <tr>
                         <td style="width: 40%">@item.Name</td>
                         <td style="width: 30%">
-                            <select class="form-select form-select-sm"
-                                    value="@item.Quantity"
-                                    @onchange="e => ChangeQuantityAsync(item, e)">
-                                @foreach (var q in Enum.GetValues<StockLevel>())
-                                {
-                                    <option value="@q">@q</option>
-                                }
-                            </select>
+                            <input class="form-control form-control-sm"
+                                   value="@item.Quantity"
+                                   placeholder="e.g. 2 bags" maxlength="50"
+                                   @onchange="e => ChangeQuantityAsync(item, e)" />
                         </td>
                         <td class="text-muted small">@item.Notes</td>
                         <td style="width: 1%">
@@ -90,7 +82,7 @@ else
     private List<InventoryItem>? items;
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
-    private StockLevel newQuantity = StockLevel.Medium;
+    private string newQuantity = string.Empty;
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
@@ -101,17 +93,14 @@ else
         if (string.IsNullOrWhiteSpace(newName)) return;
         await Svc.UpsertAsync(newName, newQuantity, newCategory);
         newName = string.Empty;
-        newQuantity = StockLevel.Medium;
+        newQuantity = string.Empty;
         await RefreshAsync();
     }
 
     private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
     {
-        if (Enum.TryParse<StockLevel>(e.Value?.ToString(), out var level))
-        {
-            await Svc.UpsertAsync(item.Name, level, item.Category);
-            await RefreshAsync();
-        }
+        await Svc.UpsertAsync(item.Name, e.Value?.ToString() ?? "", item.Category);
+        await RefreshAsync();
     }
 
     private async Task DeleteAsync(int id)

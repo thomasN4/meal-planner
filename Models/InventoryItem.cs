@@ -13,7 +13,13 @@ public class InventoryItem
     [MaxLength(100)]
     public string Name { get; set; } = string.Empty;
 
-    public StockLevel Quantity { get; set; } = StockLevel.Medium;
+    /// <summary>
+    /// Free-text amount, e.g. "2 bags", "3 cartons", "half a bottle".
+    /// This household rarely measures anything, so no units/numbers enforced.
+    /// Empty means "have some, amount unspecified".
+    /// </summary>
+    [MaxLength(50)]
+    public string Quantity { get; set; } = string.Empty;
 
     public IngredientCategory Category { get; set; } = IngredientCategory.Other;
 
