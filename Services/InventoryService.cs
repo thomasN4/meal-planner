@@ -1,5 +1,6 @@
 using MealPlanner.Data;
 using MealPlanner.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace MealPlanner.Services;
@@ -43,12 +44,40 @@ public record InventoryChange(
 /// </summary>
 public class InventoryService
 {
+    // EF doesn't enforce [MaxLength] at save time and SQLite ignores TEXT
+    // lengths, so the service is the trust boundary — especially for values
+    // arriving from Claude's MCP tools rather than the constrained UI form.
+    private const int MaxNameLength = 100;
+    private const int MaxNotesLength = 500;
+
     private readonly IDbContextFactory<MealPlannerDbContext> _factory;
 
     public InventoryService(IDbContextFactory<MealPlannerDbContext> factory)
     {
         _factory = factory;
     }
+
+    private static string NormalizeName(string name)
+    {
+        name = name.Trim();
+        if (name.Length == 0)
+        {
+            throw new ArgumentException("Ingredient name must not be empty.", nameof(name));
+        }
+        return name.Length <= MaxNameLength ? name : name[..MaxNameLength].TrimEnd();
+    }
+
+    private static string? NormalizeNotes(string? notes) =>
+        notes is null || notes.Length <= MaxNotesLength ? notes : notes[..MaxNotesLength];
+
+    /// <summary>
+    /// True for failures caused by two writers racing (the UI and Claude can
+    /// genuinely write at the same time): a lost insert race tripping the
+    /// unique Name index, or updating/removing a row another writer deleted.
+    /// </summary>
+    private static bool IsWriteRace(DbUpdateException ex) =>
+        ex is DbUpdateConcurrencyException
+        || ex.InnerException is SqliteException { SqliteErrorCode: 19 }; // SQLITE_CONSTRAINT
 
     public async Task<List<InventoryItem>> GetAllAsync(CancellationToken ct = default)
     {
@@ -77,7 +106,30 @@ public class InventoryService
         string? notes = null,
         CancellationToken ct = default)
     {
-        name = name.Trim();
+        name = NormalizeName(name);
+        notes = NormalizeNotes(notes);
+
+        // Read-then-write races once and retries: the second attempt sees the
+        // winning writer's row and takes the other branch.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await UpsertOnceAsync(name, quantity, category, notes, ct);
+            }
+            catch (DbUpdateException ex) when (attempt == 0 && IsWriteRace(ex))
+            {
+            }
+        }
+    }
+
+    private async Task<InventoryChange> UpsertOnceAsync(
+        string name,
+        StockLevel quantity,
+        IngredientCategory? category,
+        string? notes,
+        CancellationToken ct)
+    {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var existing = await db.InventoryItems.FirstOrDefaultAsync(i => i.Name == name, ct);
 
@@ -117,7 +169,7 @@ public class InventoryService
 
     public async Task<InventoryChange> RemoveAsync(string name, CancellationToken ct = default)
     {
-        name = name.Trim();
+        name = NormalizeName(name);
         await using var db = await _factory.CreateDbContextAsync(ct);
         var existing = await db.InventoryItems.FirstOrDefaultAsync(i => i.Name == name, ct);
         if (existing is null)
@@ -127,14 +179,23 @@ public class InventoryService
 
         var before = existing.Quantity;
         db.InventoryItems.Remove(existing);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another writer already removed it.
+            return new InventoryChange(name, ChangeKind.NotFound, null, null, existing.Category);
+        }
         return new InventoryChange(existing.Name, ChangeKind.Removed, before, null, existing.Category);
     }
 
     /// <summary>Save an item edited in the UI (create or update by Id).</summary>
     public async Task SaveAsync(InventoryItem item, CancellationToken ct = default)
     {
-        item.Name = item.Name.Trim();
+        item.Name = NormalizeName(item.Name);
+        item.Notes = NormalizeNotes(item.Notes);
         item.UpdatedAt = DateTime.UtcNow;
         await using var db = await _factory.CreateDbContextAsync(ct);
         if (item.Id == 0)
@@ -155,7 +216,14 @@ public class InventoryService
         if (item is not null)
         {
             db.InventoryItems.Remove(item);
-            await db.SaveChangesAsync(ct);
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // Another writer already removed it — nothing to do.
+            }
         }
     }
 }

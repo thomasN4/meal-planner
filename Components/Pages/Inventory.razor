@@ -16,7 +16,7 @@
                 <label class="form-label mb-1">Ingredient</label>
                 <input class="form-control" placeholder="e.g. Coriander"
                        @bind="newName" @bind:event="oninput"
-                       @onkeydown="@(e => { if (e.Key == "Enter") AddAsync(); })" />
+                       @onkeydown="@(async e => { if (e.Key == "Enter") await AddAsync(); })" />
             </div>
             <div class="col-md-3">
                 <label class="form-label mb-1">Category</label>
