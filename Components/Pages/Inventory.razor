@@ -1,0 +1,130 @@
+@page "/inventory"
+@rendermode InteractiveServer
+@using MealPlanner.Models
+@using MealPlanner.Services
+@inject InventoryService Svc
+
+<PageTitle>Inventory</PageTitle>
+
+<h1>Kitchen Inventory</h1>
+<p class="text-muted">What the kitchen has on hand. Claude reads and updates this too.</p>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label mb-1">Ingredient</label>
+                <input class="form-control" placeholder="e.g. Coriander"
+                       @bind="newName" @bind:event="oninput"
+                       @onkeydown="@(e => { if (e.Key == "Enter") AddAsync(); })" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1">Category</label>
+                <select class="form-select" @bind="newCategory">
+                    @foreach (var c in Enum.GetValues<IngredientCategory>())
+                    {
+                        <option value="@c">@Pretty(c)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1">Stock</label>
+                <select class="form-select" @bind="newQuantity">
+                    @foreach (var q in Enum.GetValues<StockLevel>())
+                    {
+                        <option value="@q">@q</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-primary w-100" @onclick="AddAsync"
+                        disabled="@string.IsNullOrWhiteSpace(newName)">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (items is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (items.Count == 0)
+{
+    <p class="text-muted">Nothing tracked yet. Add something above, or ask Claude to stock the kitchen.</p>
+}
+else
+{
+    @foreach (var group in items.GroupBy(i => i.Category).OrderBy(g => g.Key))
+    {
+        <h5 class="mt-3">@Pretty(group.Key)</h5>
+        <table class="table table-sm align-middle">
+            <tbody>
+                @foreach (var item in group.OrderBy(i => i.Name))
+                {
+                    <tr>
+                        <td style="width: 40%">@item.Name</td>
+                        <td style="width: 30%">
+                            <select class="form-select form-select-sm"
+                                    value="@item.Quantity"
+                                    @onchange="e => ChangeQuantityAsync(item, e)">
+                                @foreach (var q in Enum.GetValues<StockLevel>())
+                                {
+                                    <option value="@q">@q</option>
+                                }
+                            </select>
+                        </td>
+                        <td class="text-muted small">@item.Notes</td>
+                        <td style="width: 1%">
+                            <button class="btn btn-outline-danger btn-sm"
+                                    @onclick="() => DeleteAsync(item.Id)"
+                                    aria-label="Remove @item.Name">✕</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<InventoryItem>? items;
+    private string newName = string.Empty;
+    private IngredientCategory newCategory = IngredientCategory.Other;
+    private StockLevel newQuantity = StockLevel.Medium;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync() => items = await Svc.GetAllAsync();
+
+    private async Task AddAsync()
+    {
+        if (string.IsNullOrWhiteSpace(newName)) return;
+        await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        newName = string.Empty;
+        newQuantity = StockLevel.Medium;
+        await RefreshAsync();
+    }
+
+    private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
+    {
+        if (Enum.TryParse<StockLevel>(e.Value?.ToString(), out var level))
+        {
+            await Svc.UpsertAsync(item.Name, level, item.Category);
+            await RefreshAsync();
+        }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await Svc.DeleteAsync(id);
+        await RefreshAsync();
+    }
+
+    private static string Pretty(IngredientCategory c) => c switch
+    {
+        IngredientCategory.FreshHerbs => "Fresh Herbs",
+        IngredientCategory.DrySeasonings => "Dry Seasonings",
+        IngredientCategory.MeatAndSeafood => "Meat & Seafood",
+        _ => c.ToString(),
+    };
+}
