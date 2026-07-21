@@ -1,8 +1,10 @@
 @page "/inventory"
 @rendermode InteractiveServer
+@implements IDisposable
 @using MealPlanner.Models
 @using MealPlanner.Services
 @inject InventoryService Svc
+@inject InventoryChangeNotifier Notifier
 
 <PageTitle>Inventory</PageTitle>
 
@@ -84,7 +86,23 @@ else
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
 
+    protected override void OnInitialized()
+    {
+        // Out-of-circuit writers (MCP / Claude) publish here; re-render on the
+        // circuit's sync context so the table tracks the kitchen live.
+        Notifier.Subscribe(OnInventoryChanged);
+    }
+
     protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private void OnInventoryChanged(InventoryChange change)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshAsync();
+            StateHasChanged();
+        });
+    }
 
     private async Task RefreshAsync() => items = await Svc.GetAllAsync();
 
@@ -108,6 +126,8 @@ else
         await Svc.DeleteAsync(id);
         await RefreshAsync();
     }
+
+    public void Dispose() => Notifier.Unsubscribe(OnInventoryChanged);
 
     private static string Pretty(IngredientCategory c) => c switch
     {

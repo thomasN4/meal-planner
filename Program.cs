@@ -1,5 +1,7 @@
+using System.Net;
 using MealPlanner.Components;
 using MealPlanner.Data;
+using MealPlanner.Mcp;
 using MealPlanner.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,7 +17,15 @@ var connectionString = builder.Configuration.GetConnectionString("MealPlanner")
 builder.Services.AddDbContextFactory<MealPlannerDbContext>(options =>
     options.UseSqlite(connectionString));
 
+// Notifier is singleton so every Blazor circuit and every MCP tool scope
+// share one bus; InventoryService stays scoped (factory-based DB access).
+builder.Services.AddSingleton<InventoryChangeNotifier>();
 builder.Services.AddScoped<InventoryService>();
+
+builder.Services
+    .AddMcpServer()
+    .WithHttpTransport()
+    .WithTools<InventoryTools>();
 
 var app = builder.Build();
 
@@ -38,10 +48,30 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 
+// MCP is only for the locally-spawned claude process — household members use
+// the Blazor UI over the LAN, but tools must not be reachable from the LAN.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/mcp"))
+    {
+        var remote = context.Connection.RemoteIpAddress;
+        if (remote is null || !IPAddress.IsLoopback(remote))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsync("MCP endpoint is loopback-only.");
+            return;
+        }
+    }
+
+    await next();
+});
+
 app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+app.MapMcp("/mcp");
 
 app.Run();

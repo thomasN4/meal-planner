@@ -56,10 +56,23 @@ public class InventoryService
     private const int MaxNotesLength = 500;
 
     private readonly IDbContextFactory<MealPlannerDbContext> _factory;
+    private readonly InventoryChangeNotifier _notifier;
 
-    public InventoryService(IDbContextFactory<MealPlannerDbContext> factory)
+    public InventoryService(
+        IDbContextFactory<MealPlannerDbContext> factory,
+        InventoryChangeNotifier notifier)
     {
         _factory = factory;
+        _notifier = notifier;
+    }
+
+    private void PublishIfMeaningful(InventoryChange change)
+    {
+        // Skip no-ops so UI circuits don't churn on Unchanged / NotFound.
+        if (change.Kind is ChangeKind.Created or ChangeKind.Updated or ChangeKind.Removed)
+        {
+            _notifier.Publish(change);
+        }
     }
 
     private static string NormalizeName(string name)
@@ -129,7 +142,9 @@ public class InventoryService
         {
             try
             {
-                return await UpsertOnceAsync(name, quantity, category, notes, ct);
+                var change = await UpsertOnceAsync(name, quantity, category, notes, ct);
+                PublishIfMeaningful(change);
+                return change;
             }
             catch (DbUpdateException ex) when (attempt == 0 && IsWriteRace(ex))
             {
@@ -202,7 +217,10 @@ public class InventoryService
             // Another writer already removed it.
             return new InventoryChange(name, ChangeKind.NotFound, null, null, existing.Category);
         }
-        return new InventoryChange(existing.Name, ChangeKind.Removed, before, null, existing.Category);
+
+        var change = new InventoryChange(existing.Name, ChangeKind.Removed, before, null, existing.Category);
+        PublishIfMeaningful(change);
+        return change;
     }
 
     /// <summary>Save an item edited in the UI (create or update by Id).</summary>
@@ -212,8 +230,9 @@ public class InventoryService
         item.Quantity = NormalizeQuantity(item.Quantity);
         item.Notes = NormalizeNotes(item.Notes);
         item.UpdatedAt = DateTime.UtcNow;
+        var creating = item.Id == 0;
         await using var db = await _factory.CreateDbContextAsync(ct);
-        if (item.Id == 0)
+        if (creating)
         {
             db.InventoryItems.Add(item);
         }
@@ -222,23 +241,38 @@ public class InventoryService
             db.InventoryItems.Update(item);
         }
         await db.SaveChangesAsync(ct);
+
+        PublishIfMeaningful(new InventoryChange(
+            item.Name,
+            creating ? ChangeKind.Created : ChangeKind.Updated,
+            Before: null,
+            After: item.Quantity,
+            Category: item.Category));
     }
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var item = await db.InventoryItems.FindAsync([id], ct);
-        if (item is not null)
+        if (item is null)
         {
-            db.InventoryItems.Remove(item);
-            try
-            {
-                await db.SaveChangesAsync(ct);
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                // Another writer already removed it — nothing to do.
-            }
+            return;
         }
+
+        var name = item.Name;
+        var before = item.Quantity;
+        var category = item.Category;
+        db.InventoryItems.Remove(item);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another writer already removed it — nothing to do.
+            return;
+        }
+
+        PublishIfMeaningful(new InventoryChange(name, ChangeKind.Removed, before, null, category));
     }
 }

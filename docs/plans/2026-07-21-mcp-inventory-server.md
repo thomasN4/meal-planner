@@ -1,6 +1,6 @@
 # Plan: In-app MCP server for kitchen inventory
 
-Status: approved, ready to implement
+Status: implemented (2026-07-21)
 Scope: MCP endpoint + tools + live-refresh notifier + end-to-end verification.
 The chat UI (`ChatService`, streaming page) is explicitly **out of scope** — next step.
 
@@ -106,12 +106,17 @@ Also verify:
 
 ## Acceptance criteria
 
-- [ ] `/mcp` serves MCP over HTTP from inside the app process; 403 for non-loopback callers.
-- [ ] Exactly three tools: `list_inventory`, `upsert_item`, `remove_item`, all calling `InventoryService` (no direct DbContext use in tools).
-- [ ] Tool + parameter descriptions present; category values enumerated; bad input returns messages, not exceptions.
-- [ ] `InventoryChangeNotifier` wired; Inventory page live-refreshes on out-of-circuit writes; subscription disposed with the component.
-- [ ] Real `claude -p` round-trip demonstrated with `--strict-mcp-config` and `--allowedTools "mcp__inventory__*"`, DB changes confirmed.
-- [ ] Build clean; work committed (don't commit `mealplanner.db`).
+- [x] `/mcp` serves MCP over HTTP from inside the app process; 403 for non-loopback callers.
+- [x] Exactly three tools: `list_inventory`, `upsert_item`, `remove_item`, all calling `InventoryService` (no direct DbContext use in tools).
+- [x] Tool + parameter descriptions present; category values enumerated; bad input returns messages, not exceptions.
+- [x] `InventoryChangeNotifier` wired; Inventory page live-refreshes on out-of-circuit writes; subscription disposed with the component.
+- [x] Real `claude -p` round-trip demonstrated with `--strict-mcp-config` and `--allowedTools "mcp__inventory__*"`, DB changes confirmed.
+- [x] Build clean; work committed (don't commit `mealplanner.db`).
+
+### E2E note (2026-07-21)
+
+`claude -p` with opus removed basil and added rice ("2 bags", Grains). Basil was removed
+rather than quantity set to "none".
 
 ## Known gotchas for the implementer
 

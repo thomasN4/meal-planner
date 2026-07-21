@@ -27,9 +27,10 @@ EF Core + SQLite. No authentication by design: it serves a trusted home LAN.
 - `Components/Pages/` — Razor pages, `@rendermode InteractiveServer`.
 - Migrations auto-apply on startup (`Program.cs`), DB file `mealplanner.db`
   sits next to the app and is gitignored.
-- Planned/ongoing: an in-app MCP server so headless Claude
-  (`claude -p ... --mcp-config ...`) can read/update inventory —
-  see `docs/plans/`.
+- In-app MCP server at `/mcp` (loopback-only) so headless Claude
+  (`claude -p ... --mcp-config ...`) can read/update inventory via
+  `Mcp/InventoryTools.cs` → `InventoryService`. Live UI refresh via
+  `InventoryChangeNotifier`. See `docs/plans/2026-07-21-mcp-inventory-server.md`.
 
 ## Build & run
 
