@@ -5,6 +5,7 @@
 @using MealPlanner.Services
 @inject InventoryService Svc
 @inject InventoryChangeNotifier Notifier
+@inject ILogger<Inventory> Logger
 
 <PageTitle>Inventory</PageTitle>
 
@@ -18,7 +19,10 @@
                 <label class="form-label mb-1">Ingredient</label>
                 <input class="form-control" placeholder="e.g. Coriander"
                        @bind="newName" @bind:event="oninput"
-                       @onkeydown="@(async e => { if (e.Key == "Enter") await AddAsync(); })" />
+                       @onkeydown="@(async e =>
+                                   {
+                                       if (e.Key == "Enter") await AddAsync();
+                                   })"/>
             </div>
             <div class="col-md-3">
                 <label class="form-label mb-1">Category</label>
@@ -32,7 +36,7 @@
             <div class="col-md-3">
                 <label class="form-label mb-1">Quantity</label>
                 <input class="form-control" placeholder="e.g. 2 bags"
-                       @bind="newQuantity" maxlength="50" />
+                       @bind="newQuantity" maxlength="50"/>
             </div>
             <div class="col-md-2">
                 <button class="btn btn-primary w-100" @onclick="AddAsync"
@@ -57,24 +61,24 @@ else
         <h5 class="mt-3">@Pretty(group.Key)</h5>
         <table class="table table-sm align-middle">
             <tbody>
-                @foreach (var item in group.OrderBy(i => i.Name))
-                {
-                    <tr>
-                        <td style="width: 40%">@item.Name</td>
-                        <td style="width: 30%">
-                            <input class="form-control form-control-sm"
-                                   value="@item.Quantity"
-                                   placeholder="e.g. 2 bags" maxlength="50"
-                                   @onchange="e => ChangeQuantityAsync(item, e)" />
-                        </td>
-                        <td class="text-muted small">@item.Notes</td>
-                        <td style="width: 1%">
-                            <button class="btn btn-outline-danger btn-sm"
-                                    @onclick="() => DeleteAsync(item.Id)"
-                                    aria-label="Remove @item.Name">✕</button>
-                        </td>
-                    </tr>
-                }
+            @foreach (var item in group.OrderBy(i => i.Name))
+            {
+                <tr>
+                    <td style="width: 40%">@item.Name</td>
+                    <td style="width: 30%">
+                        <input class="form-control form-control-sm"
+                               value="@item.Quantity"
+                               placeholder="e.g. 2 bags" maxlength="50"
+                               @onchange="e => ChangeQuantityAsync(item, e)"/>
+                    </td>
+                    <td class="text-muted small">@item.Notes</td>
+                    <td style="width: 1%">
+                        <button class="btn btn-outline-danger btn-sm"
+                                @onclick="() => DeleteAsync(item.Id)"
+                                aria-label="Remove @item.Name">✕</button>
+                    </td>
+                </tr>
+            }
             </tbody>
         </table>
     }
@@ -91,6 +95,7 @@ else
         // Out-of-circuit writers (MCP / Claude) publish here; re-render on the
         // circuit's sync context so the table tracks the kitchen live.
         Notifier.Subscribe(OnInventoryChanged);
+        Logger.LogDebug("Inventory initialized. instance={Instance}", GetHashCode());
     }
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
@@ -126,8 +131,12 @@ else
         await Svc.DeleteAsync(id);
         await RefreshAsync();
     }
-
-    public void Dispose() => Notifier.Unsubscribe(OnInventoryChanged);
+    
+    public void Dispose()
+    {
+        Notifier.Unsubscribe(OnInventoryChanged);
+        Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
+    }
 
     private static string Pretty(IngredientCategory c) => c switch
     {
