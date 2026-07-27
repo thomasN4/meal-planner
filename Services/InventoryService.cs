@@ -66,12 +66,12 @@ public class InventoryService
         _notifier = notifier;
     }
 
-    private void PublishIfMeaningful(InventoryChange change)
+    private async Task PublishIfMeaningfulAsync(InventoryChange change)
     {
         // Skip no-ops so UI circuits don't churn on Unchanged / NotFound.
         if (change.Kind is ChangeKind.Created or ChangeKind.Updated or ChangeKind.Removed)
         {
-            _notifier.Publish(change);
+            await _notifier.PublishAsync(change);
         }
     }
 
@@ -138,18 +138,23 @@ public class InventoryService
 
         // Read-then-write races once and retries: the second attempt sees the
         // winning writer's row and takes the other branch.
+        InventoryChange change;
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                var change = await UpsertOnceAsync(name, quantity, category, notes, ct);
-                PublishIfMeaningful(change);
-                return change;
+                change = await UpsertOnceAsync(name, quantity, category, notes, ct);
+                break;
             }
             catch (DbUpdateException ex) when (attempt == 0 && IsWriteRace(ex))
             {
             }
         }
+
+        // Publishing sits outside the retry loop: inside it, a DbUpdateException
+        // surfacing from a subscriber would re-enter the loop and write twice.
+        await PublishIfMeaningfulAsync(change);
+        return change;
     }
 
     private async Task<InventoryChange> UpsertOnceAsync(
@@ -219,7 +224,7 @@ public class InventoryService
         }
 
         var change = new InventoryChange(existing.Name, ChangeKind.Removed, before, null, existing.Category);
-        PublishIfMeaningful(change);
+        await PublishIfMeaningfulAsync(change);
         return change;
     }
 
@@ -242,7 +247,7 @@ public class InventoryService
         }
         await db.SaveChangesAsync(ct);
 
-        PublishIfMeaningful(new InventoryChange(
+        await PublishIfMeaningfulAsync(new InventoryChange(
             item.Name,
             creating ? ChangeKind.Created : ChangeKind.Updated,
             Before: null,
@@ -273,6 +278,6 @@ public class InventoryService
             return;
         }
 
-        PublishIfMeaningful(new InventoryChange(name, ChangeKind.Removed, before, null, category));
+        await PublishIfMeaningfulAsync(new InventoryChange(name, ChangeKind.Removed, before, null, category));
     }
 }

@@ -8,7 +8,7 @@ namespace MealPlanner.Services;
 public sealed class InventoryChangeNotifier
 {
     private readonly Lock _gate = new();
-    private readonly List<Action<InventoryChange>> _handlers = [];
+    private readonly List<Func<InventoryChange, Task>> _handlers = [];
     private readonly ILogger<InventoryChangeNotifier> _logger;
 
     public InventoryChangeNotifier(ILogger<InventoryChangeNotifier> logger)
@@ -16,7 +16,14 @@ public sealed class InventoryChangeNotifier
         _logger = logger;
     }
 
-    public void Subscribe(Action<InventoryChange> handler)
+    /// <summary>
+    /// Handlers are async so subscribers can await their real work (a DB read,
+    /// a re-render) instead of discarding a task — a dropped task swallows the
+    /// exception and loses the re-render, which AGENTS.md forbids.
+    /// Pass a method group: Unsubscribe matches on delegate equality, so a
+    /// fresh lambda would never be removed.
+    /// </summary>
+    public void Subscribe(Func<InventoryChange, Task> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         lock (_gate)
@@ -25,7 +32,7 @@ public sealed class InventoryChangeNotifier
         }
     }
 
-    public void Unsubscribe(Action<InventoryChange> handler)
+    public void Unsubscribe(Func<InventoryChange, Task> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         lock (_gate)
@@ -34,9 +41,11 @@ public sealed class InventoryChangeNotifier
         }
     }
 
-    public void Publish(InventoryChange change)
+    public async Task PublishAsync(InventoryChange change)
     {
-        Action<InventoryChange>[] snapshot;
+        // Snapshot under the gate, then release it: handlers are awaited below
+        // and a Lock cannot be held across an await.
+        Func<InventoryChange, Task>[] snapshot;
         lock (_gate)
         {
             snapshot = _handlers.ToArray();
@@ -50,7 +59,7 @@ public sealed class InventoryChangeNotifier
         {
             try
             {
-                handler(change);
+                await handler(change);
             }
             catch (Exception ex)
             {

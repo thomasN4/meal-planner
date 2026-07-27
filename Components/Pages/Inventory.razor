@@ -94,20 +94,20 @@ else
     {
         // Out-of-circuit writers (MCP / Claude) publish here; re-render on the
         // circuit's sync context so the table tracks the kitchen live.
-        Notifier.Subscribe(OnInventoryChanged);
+        Notifier.Subscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory initialized. instance={Instance}", GetHashCode());
     }
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
-    private void OnInventoryChanged(InventoryChange change)
-    {
-        _ = InvokeAsync(async () =>
+    // Returns the task rather than dropping it, so a failed refresh surfaces to
+    // the notifier's guard and gets logged instead of vanishing.
+    private Task OnInventoryChangedAsync(InventoryChange change) =>
+        InvokeAsync(async () =>
         {
             await RefreshAsync();
             StateHasChanged();
         });
-    }
 
     private async Task RefreshAsync() => items = await Svc.GetAllAsync();
 
@@ -134,7 +134,7 @@ else
     
     public void Dispose()
     {
-        Notifier.Unsubscribe(OnInventoryChanged);
+        Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }
 
