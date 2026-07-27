@@ -20,7 +20,8 @@ integration are in progress (see [`docs/plans/`](docs/plans/)).
 
 ## Stack
 
-- ASP.NET Core **Blazor Server** (.NET 10) — interactive UI, no JavaScript build
+- ASP.NET Core **Blazor Web App** (.NET 10) running the Interactive Server
+  render mode — interactive UI, no JavaScript build
 - **EF Core + SQLite** — single-file local database (`mealplanner.db`), migrations
   auto-apply on startup
 - No accounts/auth: it's a trusted-home-LAN app by design

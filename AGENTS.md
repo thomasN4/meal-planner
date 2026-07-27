@@ -1,7 +1,8 @@
 # MealPlanner — agent instructions
 
-Locally-hosted meal planner for one household. Blazor Server (net10.0) +
-EF Core + SQLite. No authentication by design: it serves a trusted home LAN.
+Locally-hosted meal planner for one household. Blazor Web App (net10.0,
+Interactive Server render mode) + EF Core + SQLite. No authentication by
+design: it serves a trusted home LAN.
 
 ## Architecture
 
