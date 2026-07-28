@@ -5,6 +5,10 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MealPlanner", "MealPlanner.csproj", "{8BF8FF73-D227-46B1-96FD-D8D384246A19}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MealPlanner.Tests", "tests\MealPlanner.Tests\MealPlanner.Tests.csproj", "{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,8 +31,23 @@ Global
 		{8BF8FF73-D227-46B1-96FD-D8D384246A19}.Release|x64.Build.0 = Release|Any CPU
 		{8BF8FF73-D227-46B1-96FD-D8D384246A19}.Release|x86.ActiveCfg = Release|Any CPU
 		{8BF8FF73-D227-46B1-96FD-D8D384246A19}.Release|x86.Build.0 = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|x64.Build.0 = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Debug|x86.Build.0 = Debug|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|x64.ActiveCfg = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|x64.Build.0 = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|x86.ActiveCfg = Release|Any CPU
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EA91AFE8-9C4B-4C49-A3B3-BA06975817A8} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

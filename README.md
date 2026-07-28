@@ -59,6 +59,8 @@ authentication by design — only put this on a network you trust.
 
 - Open `MealPlanner.sln` in Rider / VS / VS Code.
 - `dotnet build` should stay at zero warnings.
+- `dotnet test` runs the service suite in `tests/MealPlanner.Tests` — real
+  SQLite, real concurrent writers.
 - EF migrations: `export PATH="$PATH:$HOME/.dotnet/tools"`, then
   `dotnet ef migrations add <Name>`.
 - Agent/contributor conventions live in [`AGENTS.md`](AGENTS.md).
