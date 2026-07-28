@@ -71,7 +71,15 @@ after touching `InventoryService` write paths.
 
 - Async all the way in components; don't fire-and-forget handlers
   (`@onkeydown="@(async e => ... await ...)"` — a bare call loses re-render
-  and swallows exceptions).
+  and swallows exceptions). `InventoryChangeNotifier` handlers are
+  `Func<InventoryChange, Task>` for the same reason — subscribe with a method
+  group, since `Unsubscribe` matches on delegate equality.
+- The Ingredient box's `@bind:event="oninput"` costs a server round trip per
+  keystroke, because the Add button's `disabled` state reads `newName` live.
+  **Deliberate**: on a LAN the latency is invisible, and the alternative
+  (debounce, or `onchange`) either complicates the code or leaves the button
+  stale. Don't "optimize" it away — it would only matter over the internet,
+  which this app is not for.
 - `InventoryService` methods may throw `ArgumentException` for empty names —
   UI guards before calling; API-ish callers (MCP tools) must catch and return
   a message instead.
