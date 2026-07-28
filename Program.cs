@@ -42,11 +42,13 @@ using (var scope = app.Services.CreateScope())
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-    app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
+
+// No HTTPS redirect or HSTS: the household is served plain HTTP over the LAN,
+// where there is no certificate to redirect to. Both were no-ops that would
+// turn harmful the moment ASPNETCORE_HTTPS_PORT got set, bouncing every
+// household member to a port with nothing listening.
 
 // MCP is only for the locally-spawned claude process — household members use
 // the Blazor UI over the LAN, but tools must not be reachable from the LAN.
