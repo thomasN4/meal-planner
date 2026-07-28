@@ -108,7 +108,7 @@ public class InventoryConcurrencyTests
         Assert.InRange(await harness.CountAsync(), 0, 1);
     }
 
-    [Fact(Skip = "Known bug, found by this suite: UpsertAsync retries once, "
+    [Fact(Skip = "Known bug, issue #5, found by this suite: UpsertAsync retries once, "
                  + "which three-plus writers racing one name can exhaust — two "
                  + "upserts and a remove leave the second attempt losing too, "
                  + "and a raw DbUpdateException escapes to the caller. Reaches "
