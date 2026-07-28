@@ -61,6 +61,8 @@ authentication by design — only put this on a network you trust.
 - `dotnet build` should stay at zero warnings.
 - `dotnet test` runs the service suite in `tests/MealPlanner.Tests` — real
   SQLite, real concurrent writers.
+- CI (`.github/workflows/ci.yml`) builds and tests in Release on every pull
+  request and every push to `main`.
 - EF migrations: `export PATH="$PATH:$HOME/.dotnet/tools"`, then
   `dotnet ef migrations add <Name>`.
 - Agent/contributor conventions live in [`AGENTS.md`](AGENTS.md).
