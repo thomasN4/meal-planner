@@ -37,9 +37,12 @@ design: it serves a trusted home LAN.
 
 ```bash
 dotnet build                 # zero warnings expected — keep it that way
-dotnet run                   # serves http://localhost:5263 (launchSettings "http" profile)
+dotnet run                   # serves http://0.0.0.0:5263 (launchSettings "http" profile)
 ```
 
+- Binds `0.0.0.0`, not loopback: the household reaches it over the LAN, which
+  is the point of the app. That makes the `/mcp` loopback guard in `Program.cs`
+  load-bearing rather than decorative — don't weaken it.
 - `ASPNETCORE_URLS` alone won't change the port — `dotnet run` prefers the
   launchSettings profile; use `--no-launch-profile` to override.
 - EF CLI: `export PATH="$PATH:$HOME/.dotnet/tools"` first, then

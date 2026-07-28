@@ -40,6 +40,21 @@ dotnet run
 Then open <http://localhost:5263>. The database is created automatically on
 first run.
 
+### Serving the household
+
+The app binds `0.0.0.0:5263`, so everyone on the LAN reaches it at
+`http://<host-lan-ip>:5263` — `hostname -I` gives the address (currently
+`192.168.2.161`, though DHCP can move it). If the host runs a firewall, open
+the port to the LAN only:
+
+```bash
+sudo ufw allow from 192.168.2.0/24 to any port 5263 proto tcp
+```
+
+The `/mcp` endpoint stays loopback-only regardless, so opening the port exposes
+the inventory UI to the household but never Claude's tools. There is no
+authentication by design — only put this on a network you trust.
+
 ## Development
 
 - Open `MealPlanner.sln` in Rider / VS / VS Code.
