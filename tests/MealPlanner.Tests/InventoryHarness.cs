@@ -39,6 +39,9 @@ internal sealed class InventoryHarness : IAsyncDisposable
 
     public IDbContextFactory<MealPlannerDbContext> Factory { get; }
 
+    /// <summary>The temp SQLite file, for tests that need to break the store.</summary>
+    public string DatabasePath => _databasePath;
+
     public InventoryChangeNotifier Notifier { get; }
 
     public InventoryService Service { get; }

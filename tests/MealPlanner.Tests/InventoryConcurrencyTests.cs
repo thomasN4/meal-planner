@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace MealPlanner.Tests;
 
 /// <summary>
@@ -92,12 +94,12 @@ public class InventoryConcurrencyTests
     }
 
     [Fact]
-    public async Task One_upsert_racing_one_remove_survives_on_the_single_retry()
+    public async Task One_upsert_racing_one_remove_leaves_a_consistent_row_count()
     {
         await using var harness = await InventoryHarness.CreateAsync();
         await harness.Service.UpsertAsync("Rice", "2 bags", IngredientCategory.Grains);
 
-        // Two writers is the case retry-once is sized for: whichever way they
+        // Two writers never needed more than one retry — whichever way they
         // interleave, the loser's second attempt sees a settled world. The
         // interleaving is opportunistic, so this passes even when they happen
         // not to collide — it is a regression guard, not a proof.
@@ -108,18 +110,15 @@ public class InventoryConcurrencyTests
         Assert.InRange(await harness.CountAsync(), 0, 1);
     }
 
-    [Fact(Skip = "Known bug, issue #5, found by this suite: UpsertAsync retries once, "
-                 + "which three-plus writers racing one name can exhaust — two "
-                 + "upserts and a remove leave the second attempt losing too, "
-                 + "and a raw DbUpdateException escapes to the caller. Reaches "
-                 + "the UI as an unhandled circuit exception and MCP as an "
-                 + "opaque tool error (InventoryTools catches only "
-                 + "ArgumentException). Unskip with the fix.")]
+    [Fact]
     public async Task Upserts_racing_removes_of_the_same_name_never_throw()
     {
         await using var harness = await InventoryHarness.CreateAsync();
         await harness.Service.UpsertAsync("Rice", "2 bags", IngredientCategory.Grains);
 
+        // Issue #5's regression guard. A single retry could not survive this:
+        // every losing attempt flips branch, so with removes still in flight a
+        // writer could lose twice and throw DbUpdateException at its caller.
         await InventoryHarness.InParallelAsync(Writers, i => i % 2 == 0
             ? harness.NewService().UpsertAsync("Rice", $"{i} bags")
             : harness.NewService().RemoveAsync("Rice"));
@@ -127,6 +126,34 @@ public class InventoryConcurrencyTests
         // Whoever wins the last write, the NOCASE unique index must never let
         // a duplicate through and the database must stay readable.
         Assert.InRange(await harness.CountAsync(), 0, 1);
+    }
+
+    [Fact]
+    public async Task A_write_failure_that_is_not_a_race_is_not_swallowed()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        // Read-only before the first connection opens, so reads still work and
+        // only the write fails — with SQLITE_READONLY, which is not a race.
+        File.SetAttributes(harness.DatabasePath, FileAttributes.ReadOnly);
+        var published = new List<InventoryChange>();
+        harness.Notifier.Subscribe(change =>
+        {
+            published.Add(change);
+            return Task.CompletedTask;
+        });
+
+        try
+        {
+            // The wider retry budget must not turn a genuine failure into a
+            // diff that never happened. It surfaces, and nothing is announced.
+            await Assert.ThrowsAnyAsync<DbUpdateException>(
+                () => harness.Service.UpsertAsync("Rice", "2 bags", IngredientCategory.Grains));
+            Assert.Empty(published);
+        }
+        finally
+        {
+            File.SetAttributes(harness.DatabasePath, FileAttributes.Normal);
+        }
     }
 
     [Fact]

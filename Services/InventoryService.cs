@@ -55,6 +55,14 @@ public class InventoryService
     private const int MaxQuantityLength = 50;
     private const int MaxNotesLength = 500;
 
+    // How many times an upsert may lose a write race before giving up. One is
+    // not enough: every losing attempt flips branch (a lost insert retries into
+    // an update, an update whose row was deleted retries into an insert), so
+    // three or more writers on one name can keep flipping a writer into a fresh
+    // loss. Raising the count alone still lost under load — writers retry in
+    // lockstep and re-collide — hence the jittered backoff below.
+    private const int MaxUpsertAttempts = 8;
+
     private readonly IDbContextFactory<MealPlannerDbContext> _factory;
     private readonly InventoryChangeNotifier _notifier;
 
@@ -136,8 +144,10 @@ public class InventoryService
         quantity = NormalizeQuantity(quantity);
         notes = NormalizeNotes(notes);
 
-        // Read-then-write races once and retries: the second attempt sees the
-        // winning writer's row and takes the other branch.
+        // Read-then-write is racy, so retry a bounded number of times: each
+        // attempt re-reads and takes whichever branch the world is now in.
+        // Exhausting the budget rethrows rather than returning a diff that
+        // never happened — a write this contended should fail loudly.
         InventoryChange change;
         for (var attempt = 0; ; attempt++)
         {
@@ -146,8 +156,19 @@ public class InventoryService
                 change = await UpsertOnceAsync(name, quantity, category, notes, ct);
                 break;
             }
-            catch (DbUpdateException ex) when (attempt == 0 && IsWriteRace(ex))
+            catch (DbUpdateException ex)
+                when (attempt < MaxUpsertAttempts - 1 && IsWriteRace(ex))
             {
+                // The first retry goes straight back: a plain two-writer race
+                // is already settled by the time we re-read, and this is the
+                // common case worth keeping fast. Losing twice means a genuine
+                // storm, so back off by a growing jittered few milliseconds —
+                // without it, the same writers keep retrying in step and
+                // re-colliding, which is how the budget got exhausted at all.
+                if (attempt > 0)
+                {
+                    await Task.Delay(Random.Shared.Next(2, 10) * attempt, ct);
+                }
             }
         }
 

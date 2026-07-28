@@ -145,6 +145,30 @@ public class InventoryToolsTests
     }
 
     [Fact]
+    public async Task Upsert_turns_a_failed_write_into_a_message_rather_than_an_exception()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        // Read-only before the first connection opens: reads work, the write
+        // fails. Stands in for the service exhausting its retry budget, which
+        // is the other way a DbUpdateException reaches this catch.
+        File.SetAttributes(harness.DatabasePath, FileAttributes.ReadOnly);
+
+        try
+        {
+            var result = await InventoryTools.UpsertItem(harness.Service, "Rice", "2 bags");
+
+            // An exception here would reach Claude as an opaque transport
+            // error; a sentence is something it can act on.
+            Assert.Contains("Could not save", result);
+            Assert.Contains("Rice", result);
+        }
+        finally
+        {
+            File.SetAttributes(harness.DatabasePath, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
     public async Task Remove_returns_a_diff()
     {
         await using var harness = await InventoryHarness.CreateAsync();
