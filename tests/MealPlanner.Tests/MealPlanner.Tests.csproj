@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- xUnit v3 test projects are executables that host their own runner. -->
+    <OutputType>Exe</OutputType>
+    <!-- The app builds warning-free; hold the tests to the same bar. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- xUnit1051 wants TestContext.Current.CancellationToken threaded into
+         every service call. These tests all finish in milliseconds against a
+         local temp file, so the token would buy nothing and cost a trailing
+         argument on well over a hundred call sites. -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\MealPlanner.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="MealPlanner.Models" />
+    <Using Include="MealPlanner.Services" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

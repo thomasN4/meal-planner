@@ -53,19 +53,29 @@ dotnet run                   # serves http://0.0.0.0:5263 (launchSettings "http"
 
 ## Testing
 
-No test project yet. Service-level checks use .NET 10 **file-based apps** in a
-scratch directory (never committed):
+`tests/MealPlanner.Tests` — xUnit v3, in `MealPlanner.sln`, so Rider's test
+runner picks it up. Run everything with `dotnet test`. Green is the only
+acceptable state; the project builds with `TreatWarningsAsErrors`.
 
-```csharp
-#:project /path/to/MealPlanner.csproj
-#:property PublishAot=false        // EF model building breaks under AOT
-// ... build a PooledDbContextFactory on a temp SQLite file, hammer the service
-```
-
-Run with `dotnet run test.cs`. There is an established concurrency smoke test
-pattern: parallel upserts of one name must yield one row and no exceptions;
-parallel removes must yield exactly one Removed. Re-run something equivalent
-after touching `InventoryService` write paths.
+- `InventoryHarness` gives each test a throwaway SQLite **file** and the real
+  service graph — no fakes, no in-memory provider. The NOCASE unique index and
+  the write races are the point, and neither exists outside real SQLite. The
+  schema comes from the committed migrations, stamped from a per-run template
+  so tests stay fast.
+- **Write concurrency tests through `InventoryHarness.InParallelAsync`, never
+  `Task.WhenAll` over a `Select`.** Microsoft.Data.Sqlite's async methods
+  complete synchronously, so the obvious spelling runs each writer to
+  completion before starting the next and races nothing — those tests pass
+  with `InventoryService`'s retry deleted. `InParallelAsync` puts every writer
+  on its own thread behind a starting gate.
+- After touching an `InventoryService` write path, verify the concurrency
+  tests still *bite*: break the retry (`attempt == 0` → `attempt < 0`) and
+  confirm they go red before you trust them green.
+- Two tests are `Skip`ped against known open bugs, each naming the issue in
+  its skip reason. Unskip with the fix rather than deleting them.
+- The `#:property PublishAot=false` note from the old file-based harness is
+  moot here — that constraint was about AOT-publishing a script, and EF model
+  building is fine in a normal test project.
 
 ## Conventions & gotchas
 
