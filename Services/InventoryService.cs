@@ -258,6 +258,19 @@ public class InventoryService
         item.UpdatedAt = DateTime.UtcNow;
         var creating = item.Id == 0;
         await using var db = await _factory.CreateDbContextAsync(ct);
+
+        // The caller hands us an item it has already edited, so the old
+        // quantity only exists in the database. Read it before saving, or the
+        // diff reports "unspecified → 3 bags" for every update. Projecting to
+        // the string rather than loading the row keeps EF from tracking a
+        // second instance of this key, which Update(item) would then reject.
+        var before = creating
+            ? null
+            : await db.InventoryItems
+                .Where(i => i.Id == item.Id)
+                .Select(i => i.Quantity)
+                .FirstOrDefaultAsync(ct);
+
         if (creating)
         {
             db.InventoryItems.Add(item);
@@ -271,7 +284,7 @@ public class InventoryService
         await PublishIfMeaningfulAsync(new InventoryChange(
             item.Name,
             creating ? ChangeKind.Created : ChangeKind.Updated,
-            Before: null,
+            Before: before,
             After: item.Quantity,
             Category: item.Category));
     }
