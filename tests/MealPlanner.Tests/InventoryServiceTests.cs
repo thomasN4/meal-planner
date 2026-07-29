@@ -337,24 +337,70 @@ public class InventoryServiceTests
         Assert.Equal(500, stored.Notes!.Length);
     }
 
-    [Fact(Skip = "Known bug, issue #2: SaveAsync hardcodes Before: null, so the "
-                 + "UI's update diff reads \"unspecified -> x\" whatever the old "
-                 + "quantity was. Unskip with the fix.")]
+    [Fact]
     public async Task Save_reports_the_previous_quantity_in_its_diff()
     {
         await using var harness = await InventoryHarness.CreateAsync();
         await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains);
         var item = (await harness.Service.FindAsync("Oats"))!;
+        // The caller edits the instance before handing it over, so "1 bag"
+        // survives only in the database — issue #2's whole point.
         item.Quantity = "empty";
 
+        var seen = Watch(harness);
+        await harness.Service.SaveAsync(item);
+
+        var change = Assert.Single(seen);
+        Assert.Equal(ChangeKind.Updated, change.Kind);
+        Assert.Equal("1 bag", change.Before);
+        Assert.Equal("empty", change.After);
+        Assert.Equal("\"Oats\": 1 bag → empty", change.Describe());
+    }
+
+    [Fact]
+    public async Task Save_reports_a_previously_empty_quantity_as_unspecified()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "", IngredientCategory.Grains);
+        var item = (await harness.Service.FindAsync("Oats"))!;
+        item.Quantity = "1 bag";
+
+        var seen = Watch(harness);
+        await harness.Service.SaveAsync(item);
+
+        // Genuinely-empty and "we didn't look" both used to render the same;
+        // now only the former can reach Describe().
+        Assert.Equal("", Assert.Single(seen).Before);
+        Assert.Equal("\"Oats\": unspecified → 1 bag", seen[0].Describe());
+    }
+
+    [Fact]
+    public async Task Save_of_a_new_item_has_no_previous_quantity()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var item = new InventoryItem
+        {
+            Name = "Oats",
+            Quantity = "1 bag",
+            Category = IngredientCategory.Grains,
+        };
+
+        var seen = Watch(harness);
+        await harness.Service.SaveAsync(item);
+
+        var change = Assert.Single(seen);
+        Assert.Equal(ChangeKind.Created, change.Kind);
+        Assert.Null(change.Before);
+    }
+
+    private static List<InventoryChange> Watch(InventoryHarness harness)
+    {
         var seen = new List<InventoryChange>();
         harness.Notifier.Subscribe(change =>
         {
             seen.Add(change);
             return Task.CompletedTask;
         });
-        await harness.Service.SaveAsync(item);
-
-        Assert.Equal("1 bag", Assert.Single(seen).Before);
+        return seen;
     }
 }
