@@ -17,8 +17,11 @@ design: it serves a trusted home LAN.
   - normalization: trim, reject empty names, clamp Name/Quantity/Notes to
     100/50/500 chars (EF doesn't enforce `[MaxLength]`, SQLite ignores TEXT
     lengths — the service is the trust boundary);
-  - race handling: upserts retry once on lost insert races / concurrent
-    deletes; removes treat already-gone rows as NotFound. Preserve this —
+  - race handling: upserts retry a bounded number of times
+    (`MaxUpsertAttempts`) on lost insert races / concurrent deletes; removes
+    treat already-gone rows as NotFound. One retry was not enough — every
+    losing attempt flips branch, so three or more writers on one name could
+    exhaust it and throw at the caller (issue #5). Preserve this —
     concurrent writers (household members + a headless Claude) are the app's
     normal case, not an edge case;
   - `InventoryChange` diff records returned from every mutation — the UI uses

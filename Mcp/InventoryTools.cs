@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using MealPlanner.Models;
 using MealPlanner.Services;
+using Microsoft.EntityFrameworkCore;
 using ModelContextProtocol.Server;
 
 namespace MealPlanner.Mcp;
@@ -111,6 +112,15 @@ public sealed class InventoryTools
         catch (ArgumentException ex)
         {
             return ex.Message;
+        }
+        catch (DbUpdateException)
+        {
+            // The service retries lost write races several times; getting here
+            // means household members and Claude were all writing this one
+            // ingredient at once. Say so in words — an exception would reach
+            // Claude as an opaque transport error it can't act on.
+            return $"Could not save \"{name.Trim()}\" — another writer changed it " +
+                   "at the same time. Try again.";
         }
     }
 
