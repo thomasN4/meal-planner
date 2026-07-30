@@ -22,6 +22,17 @@ builder.Services.AddDbContextFactory<MealPlannerDbContext>(options =>
 builder.Services.AddSingleton<InventoryChangeNotifier>();
 builder.Services.AddScoped<InventoryService>();
 
+// Auto-categorization. The categorizer is a singleton background service, so it
+// cannot hold the scoped InventoryService; it builds one per batch instead.
+// Both of that service's dependencies are singletons, so there is no scoped
+// dependency being captured here.
+builder.Services.Configure<CategorizationOptions>(
+    builder.Configuration.GetSection(CategorizationOptions.SectionName));
+builder.Services.AddSingleton<IIngredientClassifier, ClaudeIngredientClassifier>();
+builder.Services.AddSingleton<Func<InventoryService>>(sp =>
+    () => ActivatorUtilities.CreateInstance<InventoryService>(sp));
+builder.Services.AddHostedService<IngredientCategorizer>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()

@@ -25,10 +25,20 @@ public record InventoryChange(
     string? After,
     IngredientCategory Category)
 {
+    /// <summary>
+    /// Set only by category-only mutations, where Before and After are the same
+    /// quantity and the diff would otherwise read "2 bags → 2 bags". Deliberately
+    /// not a positional member: adding one would rewrite every construction site
+    /// and every test that builds this record positionally.
+    /// </summary>
+    public IngredientCategory? PreviousCategory { get; init; }
+
     public string Describe() => Kind switch
     {
         ChangeKind.Created when string.IsNullOrEmpty(After) => $"Added \"{Name}\" to {Category}",
         ChangeKind.Created => $"Added \"{Name}\" ({After}) to {Category}",
+        ChangeKind.Updated when PreviousCategory is { } previous =>
+            $"\"{Name}\": {previous} → {Category}",
         ChangeKind.Updated => $"\"{Name}\": {Display(Before)} → {Display(After)}",
         ChangeKind.Removed => $"Removed \"{Name}\"",
         ChangeKind.Unchanged => $"\"{Name}\" unchanged ({Display(After)})",
@@ -220,6 +230,87 @@ public class InventoryService
             before,
             quantity,
             existing.Category);
+    }
+
+    /// <summary>
+    /// Changes only an item's category, leaving quantity and notes alone.
+    /// <para>
+    /// Not a thin wrapper over <see cref="UpsertAsync"/> on purpose: that method
+    /// writes the quantity it was handed, so a caller who wanted to move an item
+    /// between categories would have to read the quantity first and hand it back,
+    /// erasing anything typed in between. The auto-categorizer writes seconds
+    /// after the item was created, which is exactly when someone is still typing.
+    /// </para>
+    /// <para>
+    /// <paramref name="onlyIf"/> makes the write conditional on the category the
+    /// caller last saw. The categorizer passes <c>Other</c>, so a household member
+    /// who classified the item by hand while Claude was thinking keeps their
+    /// choice — the late write becomes a no-op instead of overwriting them.
+    /// </para>
+    /// </summary>
+    public async Task<InventoryChange> SetCategoryAsync(
+        string name,
+        IngredientCategory category,
+        IngredientCategory? onlyIf = null,
+        CancellationToken ct = default)
+    {
+        name = NormalizeName(name);
+
+        // Same bounded retry as UpsertAsync, for the same reason: the row can be
+        // deleted between the read and the write by another household member.
+        InventoryChange change;
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                change = await SetCategoryOnceAsync(name, category, onlyIf, ct);
+                break;
+            }
+            catch (DbUpdateException ex)
+                when (attempt < MaxUpsertAttempts - 1 && IsWriteRace(ex))
+            {
+                if (attempt > 0)
+                {
+                    await Task.Delay(Random.Shared.Next(2, 10) * attempt, ct);
+                }
+            }
+        }
+
+        await PublishIfMeaningfulAsync(change);
+        return change;
+    }
+
+    private async Task<InventoryChange> SetCategoryOnceAsync(
+        string name,
+        IngredientCategory category,
+        IngredientCategory? onlyIf,
+        CancellationToken ct)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var existing = await db.InventoryItems.FirstOrDefaultAsync(i => i.Name == name, ct);
+        if (existing is null)
+        {
+            return new InventoryChange(name, ChangeKind.NotFound, null, null, category);
+        }
+
+        var before = existing.Category;
+        if (before == category || (onlyIf.HasValue && before != onlyIf.Value))
+        {
+            // Already there, or someone else got here first. Unchanged is not
+            // published, so this costs the UI nothing.
+            return new InventoryChange(
+                existing.Name, ChangeKind.Unchanged, existing.Quantity, existing.Quantity, before);
+        }
+
+        existing.Category = category;
+        existing.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return new InventoryChange(
+            existing.Name, ChangeKind.Updated, existing.Quantity, existing.Quantity, category)
+        {
+            PreviousCategory = before,
+        };
     }
 
     public async Task<InventoryChange> RemoveAsync(string name, CancellationToken ct = default)
