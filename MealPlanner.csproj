@@ -11,6 +11,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- ClaudeIngredientClassifier.ParseResults is a pure function over the
+         CLI's stdout, and is the piece worth testing without spawning a
+         process. It stays internal rather than widening the app's surface. -->
+    <InternalsVisibleTo Include="MealPlanner.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
