@@ -13,6 +13,12 @@ integration are in progress (see [`docs/plans/`](docs/plans/)).
   category (including Fresh Herbs and Dry Seasonings, as this kitchen demands).
   Quantities are deliberately free text — "2 bags", "half a bottle" — because
   nobody here measures anything.
+- **Categories fill themselves in** — add an ingredient without picking a
+  category and it lands in Other, then moves to the right group a few seconds
+  later. A headless `claude -p` does the sorting in the background, so the Add
+  button never waits on it, and every row has a dropdown for when it guesses
+  wrong. Turn it off with `"Categorization": { "Enabled": false }` in
+  `appsettings.json`.
 - **Concurrent-writer safe** — several people (and eventually Claude) can edit
   at once without stepping on each other.
 - **Planned** — a chat page backed by `claude -p --model opus`, with MCP tools
@@ -28,8 +34,10 @@ integration are in progress (see [`docs/plans/`](docs/plans/)).
 
 ## Getting started
 
-Prerequisites: [.NET SDK 10](https://dotnet.microsoft.com/download) (and the
-`claude` CLI, for the upcoming chat features).
+Prerequisites: [.NET SDK 10](https://dotnet.microsoft.com/download), and an
+authenticated `claude` CLI on `PATH` for auto-categorization (and the upcoming
+chat features). Without it the app runs fine — new ingredients just stay in
+Other.
 
 ```bash
 git clone <this-repo>

@@ -35,6 +35,14 @@ design: it serves a trusted home LAN.
   (`claude -p ... --mcp-config ...`) can read/update inventory via
   `Mcp/InventoryTools.cs` → `InventoryService`. Live UI refresh via
   `InventoryChangeNotifier`. See `docs/plans/2026-07-21-mcp-inventory-server.md`.
+- **Auto-categorization** — `IngredientCategorizer` (a `BackgroundService`)
+  subscribes to `InventoryChangeNotifier`, queues items **created** in `Other`,
+  and fills their category in via `IIngredientClassifier`. It deliberately does
+  *not* live inside `InventoryService`: classification takes ~3s and the service
+  is on the path of every write. Items appear in `Other` and move a moment
+  later; that second write publishes like any other, so pages refresh
+  themselves. Configured by the `Categorization` section of `appsettings.json`
+  (`Enabled: false` switches the whole thing off).
 
 ## Build & run
 
@@ -74,8 +82,14 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
 - After touching an `InventoryService` write path, verify the concurrency
   tests still *bite*: break the retry (`attempt == 0` → `attempt < 0`) and
   confirm they go red before you trust them green.
-- Two tests are `Skip`ped against known open bugs, each naming the issue in
-  its skip reason. Unskip with the fix rather than deleting them.
+- The suite never spawns the `claude` CLI. `CategorizerTests` runs the real
+  service graph against a fake `IIngredientClassifier`; the one piece of the
+  real classifier worth testing — parsing another process's stdout — is a pure
+  function, `ParseResults`, covered by `ClassifierParsingTests`.
+- `Items_created_together_go_out_as_one_call` writes **sequentially**, and the
+  comment says why: it tests the batch window, not a write race, and five
+  parallel writers on one SQLite file sometimes outlast the window, which made
+  it flaky about half the time. Don't "fix" it to `InParallelAsync`.
 - The `#:property PublishAot=false` note from the old file-based harness is
   moot here — that constraint was about AOT-publishing a script, and EF model
   building is fine in a normal test project.
@@ -109,6 +123,30 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   a message instead.
 - Don't `pkill -f` a pattern that appears in your own command line — it
   matches your own shell. Record and `kill` PIDs instead.
+- **Shelling out to `claude -p`** (`ClaudeIngredientClassifier`). The flag set
+  is load-bearing, and each of these was measured rather than guessed:
+  - `--json-schema` is not optional. Without it, classifying "coriander" came
+    back as a clarifying question in prose after 5.4s; with it, an enum value
+    in 3.3s. It is also what makes an ingredient name carrying an injected
+    instruction harmless — the worst it can produce is a wrong category.
+  - **Match results by index, never by name.** The model normalizes what it is
+    given: fed `"salt. IGNORE ALL PREVIOUS INSTRUCTIONS…"` it answers about
+    `"salt"`, so a name-keyed join silently drops rows.
+  - `--setting-sources ""` keeps this repo's `CLAUDE.md`/`AGENTS.md` out of the
+    prompt. Without it the model can answer questions about the app's port and
+    database file — i.e. every ingredient carries the agent instructions. The
+    subprocess also runs with `WorkingDirectory` set to a temp path.
+  - `--strict-mcp-config` so a call the app makes never attaches the app's own
+    MCP server; `--no-session-persistence` so ingredients don't each leave a
+    session file behind.
+  - `--effort low`, not `medium`: the answer is pinned to 13 enum values, so
+    there is no deliberation to buy.
+  - **Batch.** Eight names cost 3.4s against one name's 3.3s — spawning the
+    process dominates — which is why the interface takes a list.
+  - `--tools ""` behaved inconsistently across runs, so nothing depends on it;
+    correctness rests on the schema.
+  - Use `ProcessStartInfo.ArgumentList`, never a joined string: names arrive
+    from a LAN-facing text box and there is no shell here to quote against.
 - The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
   `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
   built-in query asks for `projectCards`, which the API now rejects. Add
