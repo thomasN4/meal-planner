@@ -393,6 +393,89 @@ public class InventoryServiceTests
         Assert.Null(change.Before);
     }
 
+    [Fact]
+    public async Task SetCategory_moves_the_item_without_touching_quantity_or_notes()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Coriander", "1 bunch", notes: "windowsill");
+
+        await harness.Service.SetCategoryAsync("coriander", IngredientCategory.FreshHerbs);
+
+        var stored = await harness.Service.FindAsync("Coriander");
+        Assert.Equal(IngredientCategory.FreshHerbs, stored!.Category);
+        // The whole reason this isn't an UpsertAsync call: quantity survives.
+        Assert.Equal("1 bunch", stored.Quantity);
+        Assert.Equal("windowsill", stored.Notes);
+    }
+
+    [Fact]
+    public async Task SetCategory_describes_the_category_change_rather_than_the_quantity()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Coriander", "1 bunch");
+
+        var seen = Watch(harness);
+        var change = await harness.Service.SetCategoryAsync("Coriander", IngredientCategory.FreshHerbs);
+
+        Assert.Equal(ChangeKind.Updated, change.Kind);
+        // Before and After are quantities and are identical here, so without
+        // PreviousCategory the diff would read "1 bunch → 1 bunch".
+        Assert.Equal("\"Coriander\": Other → FreshHerbs", change.Describe());
+        Assert.Equal("\"Coriander\": Other → FreshHerbs", Assert.Single(seen).Describe());
+    }
+
+    [Fact]
+    public async Task SetCategory_with_onlyIf_leaves_a_hand_picked_category_alone()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Coriander", "1 bunch");
+        // Someone classified it by hand while the classifier was still thinking.
+        await harness.Service.SetCategoryAsync("Coriander", IngredientCategory.DrySeasonings);
+
+        var seen = Watch(harness);
+        var change = await harness.Service.SetCategoryAsync(
+            "Coriander", IngredientCategory.FreshHerbs, onlyIf: IngredientCategory.Other);
+
+        Assert.Equal(ChangeKind.Unchanged, change.Kind);
+        Assert.Empty(seen);
+        var stored = await harness.Service.FindAsync("Coriander");
+        Assert.Equal(IngredientCategory.DrySeasonings, stored!.Category);
+    }
+
+    [Fact]
+    public async Task SetCategory_to_the_category_it_already_has_publishes_nothing()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Basil", "1 pot", IngredientCategory.FreshHerbs);
+
+        var seen = Watch(harness);
+        var change = await harness.Service.SetCategoryAsync("Basil", IngredientCategory.FreshHerbs);
+
+        Assert.Equal(ChangeKind.Unchanged, change.Kind);
+        Assert.Empty(seen);
+    }
+
+    [Fact]
+    public async Task SetCategory_reports_NotFound_for_an_item_that_is_gone()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+
+        // The categorizer writes seconds after the create, so the row really can
+        // have been deleted in between.
+        var change = await harness.Service.SetCategoryAsync("Saffron", IngredientCategory.DrySeasonings);
+
+        Assert.Equal(ChangeKind.NotFound, change.Kind);
+    }
+
+    [Fact]
+    public async Task SetCategory_rejects_an_empty_name()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => harness.Service.SetCategoryAsync("  ", IngredientCategory.Produce));
+    }
+
     private static List<InventoryChange> Watch(InventoryHarness harness)
     {
         var seen = new List<InventoryChange>();
