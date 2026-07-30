@@ -109,4 +109,11 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   a message instead.
 - Don't `pkill -f` a pattern that appears in your own command line — it
   matches your own shell. Record and `kill` PIDs instead.
+- The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
+  `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
+  built-in query asks for `projectCards`, which the API now rejects. Add
+  `--json <fields>` to the `view` commands, and edit through
+  `gh api -X PATCH repos/:owner/:repo/pulls/<n>`. **`gh pr edit` fails before
+  applying anything**, so never report an edit as landed without reading the
+  body back. `list`, `create`, `checks` and `gh api` are fine. Issue #10.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
