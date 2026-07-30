@@ -64,12 +64,23 @@ else
             @foreach (var item in group.OrderBy(i => i.Name))
             {
                 <tr>
-                    <td style="width: 40%">@item.Name</td>
-                    <td style="width: 30%">
+                    <td style="width: 30%">@item.Name</td>
+                    <td style="width: 25%">
                         <input class="form-control form-control-sm"
                                value="@item.Quantity"
                                placeholder="e.g. 2 bags" maxlength="50"
                                @onchange="e => ChangeQuantityAsync(item, e)"/>
+                    </td>
+                    <td style="width: 20%">
+                        <select class="form-select form-select-sm"
+                                value="@item.Category"
+                                aria-label="Category for @item.Name"
+                                @onchange="e => ChangeCategoryAsync(item, e)">
+                            @foreach (var c in Enum.GetValues<IngredientCategory>())
+                            {
+                                <option value="@c">@Pretty(c)</option>
+                            }
+                        </select>
                     </td>
                     <td class="text-muted small">@item.Notes</td>
                     <td style="width: 1%">
@@ -121,11 +132,28 @@ else
         await Svc.UpsertAsync(newName, newQuantity, newCategory);
         newName = string.Empty;
         newQuantity = string.Empty;
+        // Reset too: a category left over from the last add silently attached
+        // itself to the next ingredient, which is most of why everything ended
+        // up needing sorting out by hand in the first place.
+        newCategory = IngredientCategory.Other;
     }
 
     private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
     {
         await Svc.UpsertAsync(item.Name, e.Value?.ToString() ?? "", item.Category);
+    }
+
+    // The row jumps to another group on the re-render, because the table is
+    // grouped by category — that is the confirmation the change landed.
+    private async Task ChangeCategoryAsync(InventoryItem item, ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<IngredientCategory>(e.Value?.ToString(), out var category)
+            || !Enum.IsDefined(category))
+        {
+            return;
+        }
+
+        await Svc.SetCategoryAsync(item.Name, category);
     }
 
     private async Task DeleteAsync(int id)
