@@ -87,6 +87,17 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   and swallows exceptions). `InventoryChangeNotifier` handlers are
   `Func<InventoryChange, Task>` for the same reason — subscribe with a method
   group, since `Unsubscribe` matches on delegate equality.
+- `PublishAsync` fans out to subscribers **concurrently** (`Task.WhenAll`) but
+  still awaits all of them, so a write sees its result only after every circuit
+  has been told — without waiting on them one after another (issue #4). The
+  per-handler `try`/`catch` is what makes that safe: it keeps one dead circuit
+  from starving the rest, and keeps `WhenAll` from folding several failures into
+  one `AggregateException`. Don't hoist it out, and don't rely on subscribers
+  completing in subscription order.
+- A page that writes gets its own refresh from the notifier, not from the
+  handler that wrote (issue #1). `Inventory.razor`'s handlers call the service
+  and stop; the awaited publish has already refreshed and re-rendered them.
+  Re-adding a local `RefreshAsync()` after a mutation just reads the DB twice.
 - The Ingredient box's `@bind:event="oninput"` costs a server round trip per
   keystroke, because the Add button's `disabled` state reads `newName` live.
   **Deliberate**: on a LAN the latency is invisible, and the alternative

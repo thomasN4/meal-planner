@@ -30,7 +30,33 @@ public class InventoryChangeNotifierTests
 
         await notifier.PublishAsync(SampleChange());
 
+        // Handlers are *started* in subscription order, which is all this pins.
+        // Since the fan-out went concurrent (issue #4) the order they *finish*
+        // in is not guaranteed — these two happen to complete synchronously.
         Assert.Equal(["first", "second"], seen);
+    }
+
+    [Fact]
+    public async Task Subscribers_run_concurrently_rather_than_one_after_another()
+    {
+        var (notifier, _) = Build();
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Deliberately interlocked: the first handler cannot finish until the
+        // second has run. Awaiting each handler in turn never reaches the
+        // second, so this is the assertion a sequential fan-out cannot pass —
+        // which is the point of issue #4, where an MCP write waited on every
+        // open browser's DB read and re-render in sequence.
+        notifier.Subscribe(async _ => { second.SetResult(); await first.Task; });
+        notifier.Subscribe(async _ => { await second.Task; first.SetResult(); });
+
+        var publish = notifier.PublishAsync(SampleChange());
+
+        // Bounded, so a regression fails the run instead of wedging it.
+        var finished = await Task.WhenAny(publish, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(publish, finished);
+        await publish;
     }
 
     [Fact]

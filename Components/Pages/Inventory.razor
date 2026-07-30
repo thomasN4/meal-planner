@@ -92,8 +92,12 @@ else
 
     protected override void OnInitialized()
     {
-        // Out-of-circuit writers (MCP / Claude) publish here; re-render on the
-        // circuit's sync context so the table tracks the kitchen live.
+        // The single refresh path for this page: out-of-circuit writers (MCP /
+        // Claude) and this circuit's own handlers all publish here, and the
+        // re-render happens on the circuit's sync context so the table tracks
+        // the kitchen live. The handlers below deliberately do not refresh
+        // themselves — the service awaits this publish, so by the time a write
+        // returns the table is already current (issue #1).
         Notifier.Subscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory initialized. instance={Instance}", GetHashCode());
     }
@@ -117,19 +121,16 @@ else
         await Svc.UpsertAsync(newName, newQuantity, newCategory);
         newName = string.Empty;
         newQuantity = string.Empty;
-        await RefreshAsync();
     }
 
     private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
     {
         await Svc.UpsertAsync(item.Name, e.Value?.ToString() ?? "", item.Category);
-        await RefreshAsync();
     }
 
     private async Task DeleteAsync(int id)
     {
         await Svc.DeleteAsync(id);
-        await RefreshAsync();
     }
     
     public void Dispose()

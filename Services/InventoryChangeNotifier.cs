@@ -55,7 +55,20 @@ public sealed class InventoryChangeNotifier
             "Publishing {ChangeKind} for {ItemName} to {SubscriberCount} subscriber(s)",
             change.Kind, change.Name, snapshot.Length);
 
-        foreach (var handler in snapshot)
+        // Fan out concurrently. Awaiting each handler in turn made a writer wait
+        // on every open circuit's DB read and re-render, one after another —
+        // including an MCP write, which then waited on the kitchen's tabs
+        // (issue #4). The writer still awaits all of them, so delivery is
+        // guaranteed before it sees its result; what is traded away is
+        // deterministic ordering between subscribers.
+        await Task.WhenAll(snapshot.Select(GuardedAsync));
+
+        // A local async function, not the handler call inlined into the Select:
+        // this is what puts a handler that throws before its first await inside
+        // the try. Guarding per handler also means no task here ever faults, so
+        // WhenAll cannot collapse several dead circuits into one
+        // AggregateException that hides all but the first.
+        async Task GuardedAsync(Func<InventoryChange, Task> handler)
         {
             try
             {
