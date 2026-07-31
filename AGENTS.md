@@ -43,6 +43,19 @@ design: it serves a trusted home LAN.
   later; that second write publishes like any other, so pages refresh
   themselves. Configured by the `Categorization` section of `appsettings.json`
   (`Enabled: false` switches the whole thing off).
+- **Recipe generation** — `/recipes` (`Components/Pages/Recipes.razor`): knobs
+  and cards, deliberately **not** a chat surface. `ClaudeRecipeGenerator`
+  (`IRecipeGenerator`) mirrors the classifier's flag set with the inventory
+  embedded in the stdin prompt — never the app's own `/mcp`. Have/missing:
+  the model proposes an `inventoryName` per ingredient and `ParseRecipes`
+  verifies the claim against real inventory names; never trust the model's
+  word for "have". Saves go through `RecipeService` (JSON columns, length
+  clamping) which deliberately has **no retry loop and no notifier publish**
+  — recipes are plain inserts with no unique index and no out-of-circuit
+  writer; the reasons are in the class doc, don't "fix" either. The
+  `RecipeGeneration` config section's effort `medium` and 180s timeout are
+  deliberate divergences from `Categorization`. See
+  `docs/plans/2026-07-30-recipe-generation.md`.
 
 ## Build & run
 
