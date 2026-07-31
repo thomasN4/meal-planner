@@ -12,6 +12,8 @@ public class MealPlannerDbContext : DbContext
 
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
 
+    public DbSet<Recipe> Recipes => Set<Recipe>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<InventoryItem>(entity =>
