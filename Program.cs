@@ -33,6 +33,15 @@ builder.Services.AddSingleton<Func<InventoryService>>(sp =>
     () => ActivatorUtilities.CreateInstance<InventoryService>(sp));
 builder.Services.AddHostedService<IngredientCategorizer>();
 
+// Recipe generation. The generator is a stateless singleton (options + logger,
+// no DB access): the page hands it an inventory snapshot, so one list drives
+// both the prompt and the have/missing verification. RecipeService is scoped
+// like InventoryService (factory-based DB access).
+builder.Services.Configure<RecipeGenerationOptions>(
+    builder.Configuration.GetSection(RecipeGenerationOptions.SectionName));
+builder.Services.AddSingleton<IRecipeGenerator, ClaudeRecipeGenerator>();
+builder.Services.AddScoped<RecipeService>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()

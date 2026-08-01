@@ -1,0 +1,352 @@
+@page "/recipes"
+@rendermode InteractiveServer
+@implements IDisposable
+@using MealPlanner.Models
+@using MealPlanner.Services
+@using Microsoft.Extensions.Options
+@inject InventoryService InventorySvc
+@inject IRecipeGenerator Generator
+@inject RecipeService RecipeSvc
+@inject InventoryChangeNotifier Notifier
+@inject IOptions<RecipeGenerationOptions> Options
+@inject ILogger<Recipes> Logger
+
+<PageTitle>Recipes</PageTitle>
+
+<h1>Recipe Ideas</h1>
+<p class="text-muted">A few things the kitchen could cook right now, suggested by Claude from the inventory.</p>
+
+@if (!Options.Value.Enabled)
+{
+    <div class="alert alert-secondary">
+        Recipe generation is switched off (<code>RecipeGeneration:Enabled</code> in appsettings.json).
+    </div>
+}
+else
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label mb-1">Meal</label>
+                    <select class="form-select" @bind="mealType">
+                        @foreach (var m in Enum.GetValues<MealType>())
+                        {
+                            <option value="@m">@m</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label mb-1">Time</label>
+                    <select class="form-select" @bind="timeBudget">
+                        <option value="0">No limit</option>
+                        <option value="20">Under 20 min</option>
+                        <option value="40">Under 40 min</option>
+                        <option value="60">Under an hour</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-primary w-100" @onclick="GenerateAsync"
+                            disabled="@(generating || items is not { Count: > 0 })">
+                        Generate
+                    </button>
+                </div>
+            </div>
+
+            @if (items is null)
+            {
+                <p class="mt-3 mb-0"><em>Loading…</em></p>
+            }
+            else if (items.Count == 0)
+            {
+                <p class="text-muted mt-3 mb-0">
+                    Nothing in the kitchen yet — add ingredients on the Inventory page first.
+                </p>
+            }
+            else
+            {
+                <div class="mt-3">
+                    <label class="form-label mb-1">Use these up <span class="text-muted">(optional)</span></label>
+                    @foreach (var group in items.GroupBy(i => i.Category).OrderBy(g => g.Key))
+                    {
+                        <div class="mb-1">
+                            <span class="text-muted small me-2">@Pretty(group.Key):</span>
+                            @foreach (var item in group.OrderBy(i => i.Name))
+                            {
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="checkbox" id="use-@item.Id"
+                                           checked="@mustUse.Contains(item.Name)"
+                                           @onchange="e => ToggleMustUse(item.Name, e.Value is true)"/>
+                                    <label class="form-check-label" for="use-@item.Id">@item.Name</label>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (generating)
+    {
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+            <span>Asking Claude — usually 15–60 seconds…</span>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="CancelGeneration">Cancel</button>
+        </div>
+    }
+
+    @if (errorMessage is not null)
+    {
+        <div class="alert alert-warning py-2">@errorMessage</div>
+    }
+
+    @if (suggestions is not null)
+    {
+        <div class="row g-3 mb-4">
+            @for (var i = 0; i < suggestions.Count; i++)
+            {
+                var index = i;
+                var recipe = suggestions[index];
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title d-flex justify-content-between align-items-start gap-2">
+                                <span>@recipe.Title</span>
+                                <span class="badge text-bg-secondary flex-shrink-0">@recipe.Minutes min</span>
+                            </h5>
+                            <p class="card-text">@recipe.Description</p>
+                            <ul class="list-unstyled mb-2">
+                                @foreach (var ingredient in recipe.Ingredients)
+                                {
+                                    <li>
+                                        @if (ingredient.Have)
+                                        {
+                                            <span class="text-success" aria-hidden="true">✓</span>
+                                            <span>@ingredient.Name</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">@ingredient.Name</span>
+                                            <span class="badge text-bg-warning">missing</span>
+                                        }
+                                        @if (ingredient.Quantity.Length > 0)
+                                        {
+                                            <span class="text-muted small">— @ingredient.Quantity</span>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                            <details>
+                                <summary>Steps</summary>
+                                <ol class="mt-2 mb-0">
+                                    @foreach (var step in recipe.Steps)
+                                    {
+                                        <li>@step</li>
+                                    }
+                                </ol>
+                            </details>
+                        </div>
+                        <div class="card-footer">
+                            <button class="btn btn-outline-primary btn-sm"
+                                    @onclick="() => SaveAsync(index)"
+                                    disabled="@savedIndexes.Contains(index)">
+                                @(savedIndexes.Contains(index) ? "Saved" : "Save")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+<h3 class="mt-2">Saved recipes</h3>
+@if (saved is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (saved.Count == 0)
+{
+    <p class="text-muted">Nothing saved yet. Generate some ideas and keep the good ones.</p>
+}
+else
+{
+    @foreach (var recipe in saved)
+    {
+        <div class="card mb-2">
+            <div class="card-body py-2">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>@recipe.Title</strong>
+                        <span class="badge text-bg-secondary ms-1">@recipe.Minutes min</span>
+                        <span class="text-muted small ms-2">saved @recipe.CreatedAt.ToLocalTime().ToString("d MMM yyyy")</span>
+                    </div>
+                    <button class="btn btn-outline-danger btn-sm"
+                            @onclick="() => DeleteSavedAsync(recipe.Id)"
+                            aria-label="Delete @recipe.Title">✕</button>
+                </div>
+                @if (recipe.Description.Length > 0)
+                {
+                    <p class="text-muted small mb-1">@recipe.Description</p>
+                }
+                <details>
+                    <summary class="small">Ingredients &amp; steps</summary>
+                    <ul class="small mt-2 mb-1">
+                        @foreach (var ingredient in recipe.Ingredients)
+                        {
+                            <li>@ingredient.Name@(ingredient.Quantity.Length > 0 ? $" — {ingredient.Quantity}" : "")</li>
+                        }
+                    </ul>
+                    <ol class="small mb-0">
+                        @foreach (var step in recipe.Steps)
+                        {
+                            <li>@step</li>
+                        }
+                    </ol>
+                </details>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<InventoryItem>? items;
+    private List<SavedRecipe>? saved;
+    private readonly HashSet<string> mustUse = new(StringComparer.OrdinalIgnoreCase);
+    private MealType mealType = MealType.Dinner;
+    private int timeBudget; // minutes; 0 = no limit
+    private IReadOnlyList<RecipeSuggestion>? suggestions;
+    private HashSet<int> savedIndexes = [];
+    private bool generating;
+    private string? errorMessage;
+    private CancellationTokenSource? generationCts;
+
+    protected override void OnInitialized()
+    {
+        // The notifier keeps the "use these up" picker tracking the kitchen,
+        // exactly like the Inventory page. The saved-recipes list is different:
+        // recipes have no out-of-circuit writer (MCP doesn't touch them), so
+        // there is no recipe notifier and the handlers below refresh the saved
+        // list themselves after their own writes.
+        Notifier.Subscribe(OnInventoryChangedAsync);
+        Logger.LogDebug("Recipes initialized. instance={Instance}", GetHashCode());
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshInventoryAsync();
+        await RefreshSavedAsync();
+    }
+
+    private Task OnInventoryChangedAsync(InventoryChange change) =>
+        InvokeAsync(async () =>
+        {
+            await RefreshInventoryAsync();
+            StateHasChanged();
+        });
+
+    private async Task RefreshInventoryAsync()
+    {
+        items = await InventorySvc.GetAllAsync();
+        // Drop selections for items that left the kitchen since the last look.
+        mustUse.IntersectWith(items.Select(i => i.Name));
+    }
+
+    private async Task RefreshSavedAsync() => saved = await RecipeSvc.GetAllAsync();
+
+    private void ToggleMustUse(string name, bool selected)
+    {
+        if (selected)
+        {
+            mustUse.Add(name);
+        }
+        else
+        {
+            mustUse.Remove(name);
+        }
+    }
+
+    private async Task GenerateAsync()
+    {
+        // The disabled attribute alone races a double-click; the flag doesn't.
+        if (generating || items is not { Count: > 0 })
+        {
+            return;
+        }
+
+        generating = true;
+        errorMessage = null;
+        generationCts = new CancellationTokenSource();
+        try
+        {
+            // One snapshot drives both the prompt and the have/missing
+            // verification inside the generator.
+            var request = new RecipeRequest(
+                mealType,
+                timeBudget == 0 ? null : timeBudget,
+                mustUse.ToList());
+            var result = await Generator.GenerateAsync(request, items, generationCts.Token);
+
+            if (result.Count == 0)
+            {
+                // The generator never throws; the reason is in the app logs.
+                errorMessage = "Claude couldn't come up with anything — try again, or check the app logs.";
+            }
+            else
+            {
+                suggestions = result;
+                savedIndexes = [];
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancel button or navigation — the subprocess is already dead.
+        }
+        finally
+        {
+            generationCts?.Dispose();
+            generationCts = null;
+            generating = false;
+        }
+    }
+
+    private void CancelGeneration() => generationCts?.Cancel();
+
+    private async Task SaveAsync(int index)
+    {
+        if (suggestions is null || savedIndexes.Contains(index)
+            || string.IsNullOrWhiteSpace(suggestions[index].Title))
+        {
+            return;
+        }
+
+        await RecipeSvc.SaveAsync(suggestions[index]);
+        savedIndexes.Add(index);
+        await RefreshSavedAsync();
+    }
+
+    private async Task DeleteSavedAsync(int id)
+    {
+        await RecipeSvc.DeleteAsync(id);
+        await RefreshSavedAsync();
+    }
+
+    public void Dispose()
+    {
+        Notifier.Unsubscribe(OnInventoryChangedAsync);
+        // Kills a still-running claude process via the generator's timeout
+        // path. GenerateAsync's finally owns the Dispose; both run on the
+        // circuit's sync context, so this never races it.
+        generationCts?.Cancel();
+        Logger.LogDebug("Recipes disposed. instance={Instance}", GetHashCode());
+    }
+
+    private static string Pretty(IngredientCategory c) => c switch
+    {
+        IngredientCategory.FreshHerbs => "Fresh Herbs",
+        IngredientCategory.DrySeasonings => "Dry Seasonings",
+        IngredientCategory.MeatAndSeafood => "Meat & Seafood",
+        _ => c.ToString(),
+    };
+}
