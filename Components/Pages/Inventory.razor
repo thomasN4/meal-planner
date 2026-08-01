@@ -80,7 +80,10 @@ else
                     <tbody>
                     @foreach (var item in group.OrderBy(i => i.Name))
                     {
-                        <tr>
+                        @* Key by id so a deleted row's DOM (and its focus) is
+                           torn down rather than patched onto the next item —
+                           otherwise the blue ring on ✕ sticks to the survivor. *@
+                        <tr @key="item.Id">
                             <td style="width: 30%">@item.Name</td>
                             <td style="width: 25%">
                                 <input class="form-control form-control-sm"
@@ -101,7 +104,7 @@ else
                             </td>
                             <td class="text-muted small">@item.Notes</td>
                             <td style="width: 1%">
-                                <button class="btn btn-outline-danger btn-sm"
+                                <button class="btn btn-outline-danger btn-sm item-remove"
                                         @onclick="() => DeleteAsync(item.Id)"
                                         aria-label="Remove @item.Name">✕</button>
                             </td>

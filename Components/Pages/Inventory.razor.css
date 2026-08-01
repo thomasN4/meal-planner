@@ -4,12 +4,14 @@
 
 /* Kill the sticky blue focus ring after a mouse click (app.css styles
    .btn:focus). Keep a ring for keyboard focus via :focus-visible. */
-.category-toggle:focus {
+.category-toggle:focus,
+.item-remove:focus {
     box-shadow: none;
     outline: none;
 }
 
-.category-toggle:focus-visible {
+.category-toggle:focus-visible,
+.item-remove:focus-visible {
     box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
     outline: none;
 }
