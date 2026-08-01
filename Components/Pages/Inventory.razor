@@ -43,6 +43,10 @@
                         disabled="@string.IsNullOrWhiteSpace(newName)">Add</button>
             </div>
         </div>
+        @if (statusMessage is not null)
+        {
+            <div class="alert alert-success py-2 mt-3 mb-0" role="status">@statusMessage</div>
+        }
     </div>
 </div>
 
@@ -115,6 +119,8 @@ else
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
+    private string? statusMessage;
+    private CancellationTokenSource? statusCts;
     // Categories start collapsed; only ones the user opens stay open across
     // live refreshes (MCP / other circuits). HashSet so toggle is O(1).
     private readonly HashSet<IngredientCategory> expandedCategories = [];
@@ -157,15 +163,41 @@ else
     private async Task AddAsync()
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        var category = newCategory;
-        await Svc.UpsertAsync(newName, newQuantity, category);
-        ExpandCategory(category);
+        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        // Use the returned category: upsert can land on an existing row whose
+        // category differs from what the form still held.
+        ExpandCategory(change.Category);
+        await ShowStatusAsync(change.Describe());
         newName = string.Empty;
         newQuantity = string.Empty;
         // Reset too: a category left over from the last add silently attached
         // itself to the next ingredient, which is most of why everything ended
         // up needing sorting out by hand in the first place.
         newCategory = IngredientCategory.Other;
+    }
+
+    // Ephemeral success line under the add form. A new add cancels the previous
+    // timer so rapid entry never leaves a stale message behind.
+    private async Task ShowStatusAsync(string message)
+    {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
+        statusCts = new CancellationTokenSource();
+        var token = statusCts.Token;
+
+        statusMessage = message;
+        try
+        {
+            await Task.Delay(3000, token);
+            statusMessage = null;
+            // Blazor may already be rendering from another event; force a pass
+            // so the alert actually disappears after the delay.
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Next add or dispose — expected.
+        }
     }
 
     private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
@@ -194,6 +226,8 @@ else
 
     public void Dispose()
     {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
         Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }
