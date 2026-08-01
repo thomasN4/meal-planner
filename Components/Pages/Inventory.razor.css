@@ -1,0 +1,34 @@
+.category-toggle {
+    text-align: left;
+}
+
+/* Kill the sticky blue focus ring after a mouse click (app.css styles
+   .btn:focus). Keep a ring for keyboard focus via :focus-visible. */
+.category-toggle:focus {
+    box-shadow: none;
+    outline: none;
+}
+
+.category-toggle:focus-visible {
+    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+    outline: none;
+}
+
+.category-toggle:hover h5,
+.category-toggle:focus-visible h5 {
+    color: #1b6ec2;
+}
+
+.category-chevron {
+    display: inline-block;
+    width: 1rem;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    line-height: 1;
+    color: #6c757d;
+    transition: transform 0.15s ease;
+}
+
+.category-chevron.open {
+    transform: rotate(90deg);
+}

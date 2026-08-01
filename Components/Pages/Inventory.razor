@@ -58,40 +58,55 @@ else
 {
     @foreach (var group in items.GroupBy(i => i.Category).OrderBy(g => g.Key))
     {
-        <h5 class="mt-3">@Pretty(group.Key)</h5>
-        <table class="table table-sm align-middle">
-            <tbody>
-            @foreach (var item in group.OrderBy(i => i.Name))
+        var category = group.Key;
+        var isOpen = expandedCategories.Contains(category);
+        <div class="category-group mt-3">
+            <button type="button"
+                    class="category-toggle btn btn-link text-decoration-none text-body p-0 d-flex align-items-center gap-2 w-100"
+                    @onclick="() => ToggleCategory(category)"
+                    aria-expanded="@isOpen"
+                    aria-controls="@($"category-{category}")">
+                <span class="category-chevron @(isOpen ? "open" : null)" aria-hidden="true">▸</span>
+                <h5 class="mb-0">@Pretty(category)</h5>
+                <span class="text-muted small">(@group.Count())</span>
+            </button>
+            @if (isOpen)
             {
-                <tr>
-                    <td style="width: 30%">@item.Name</td>
-                    <td style="width: 25%">
-                        <input class="form-control form-control-sm"
-                               value="@item.Quantity"
-                               placeholder="e.g. 2 bags" maxlength="50"
-                               @onchange="e => ChangeQuantityAsync(item, e)"/>
-                    </td>
-                    <td style="width: 20%">
-                        <select class="form-select form-select-sm"
-                                value="@item.Category"
-                                aria-label="Category for @item.Name"
-                                @onchange="e => ChangeCategoryAsync(item, e)">
-                            @foreach (var c in Enum.GetValues<IngredientCategory>())
-                            {
-                                <option value="@c">@Pretty(c)</option>
-                            }
-                        </select>
-                    </td>
-                    <td class="text-muted small">@item.Notes</td>
-                    <td style="width: 1%">
-                        <button class="btn btn-outline-danger btn-sm"
-                                @onclick="() => DeleteAsync(item.Id)"
-                                aria-label="Remove @item.Name">✕</button>
-                    </td>
-                </tr>
+                <table id="@($"category-{category}")" class="table table-sm align-middle mt-2">
+                    <tbody>
+                    @foreach (var item in group.OrderBy(i => i.Name))
+                    {
+                        <tr>
+                            <td style="width: 30%">@item.Name</td>
+                            <td style="width: 25%">
+                                <input class="form-control form-control-sm"
+                                       value="@item.Quantity"
+                                       placeholder="e.g. 2 bags" maxlength="50"
+                                       @onchange="e => ChangeQuantityAsync(item, e)"/>
+                            </td>
+                            <td style="width: 20%">
+                                <select class="form-select form-select-sm"
+                                        value="@item.Category"
+                                        aria-label="Category for @item.Name"
+                                        @onchange="e => ChangeCategoryAsync(item, e)">
+                                    @foreach (var c in Enum.GetValues<IngredientCategory>())
+                                    {
+                                        <option value="@c">@Pretty(c)</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="text-muted small">@item.Notes</td>
+                            <td style="width: 1%">
+                                <button class="btn btn-outline-danger btn-sm"
+                                        @onclick="() => DeleteAsync(item.Id)"
+                                        aria-label="Remove @item.Name">✕</button>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
             }
-            </tbody>
-        </table>
+        </div>
     }
 }
 
@@ -100,6 +115,9 @@ else
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
+    // Categories start collapsed; only ones the user opens stay open across
+    // live refreshes (MCP / other circuits). HashSet so toggle is O(1).
+    private readonly HashSet<IngredientCategory> expandedCategories = [];
 
     protected override void OnInitialized()
     {
@@ -126,10 +144,22 @@ else
 
     private async Task RefreshAsync() => items = await Svc.GetAllAsync();
 
+    private void ToggleCategory(IngredientCategory category)
+    {
+        if (!expandedCategories.Remove(category))
+            expandedCategories.Add(category);
+    }
+
+    // Ensure the destination is visible so the user sees the row land there.
+    private void ExpandCategory(IngredientCategory category) =>
+        expandedCategories.Add(category);
+
     private async Task AddAsync()
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        var category = newCategory;
+        await Svc.UpsertAsync(newName, newQuantity, category);
+        ExpandCategory(category);
         newName = string.Empty;
         newQuantity = string.Empty;
         // Reset too: a category left over from the last add silently attached
@@ -153,6 +183,7 @@ else
             return;
         }
 
+        ExpandCategory(category);
         await Svc.SetCategoryAsync(item.Name, category);
     }
 
@@ -160,7 +191,7 @@ else
     {
         await Svc.DeleteAsync(id);
     }
-    
+
     public void Dispose()
     {
         Notifier.Unsubscribe(OnInventoryChangedAsync);
