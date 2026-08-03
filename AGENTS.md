@@ -193,6 +193,20 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   - the notifier handler drops edit mode when `editingId` matches no row — some
     other tab deleted it. `DeleteAsync` clears `editingId` *before* it writes, or
     that guard announces a removal the user just asked for themselves;
+  - `SyncDraftToRow` is the same handler's answer for a row that *changed* rather
+    than vanished, and it needs the four `edit*Touched` flags to do it. An open
+    editor froze a snapshot of all four fields, so Save wrote the whole snapshot
+    back: the categorizer moved a row to Snacks, the editor went on showing
+    Dairy under a Snacks heading, and a user fixing a note silently reverted it.
+    Untouched boxes follow the row; typed ones are the user's. Same line the add
+    form's `categoryTouched`/`quantityTouched` draw, for the same reason;
+  - the editor focuses its name input on open (`OnAfterRenderAsync` +
+    `ElementReference`). Not cosmetic: opening removes the pencil that was
+    clicked, so focus fell to `<body>`, and since Enter/Escape live on the row's
+    inputs, **Escape did nothing at all** until the user clicked into a field.
+    bUnit has no focus model but does service `Blazor._internal.domWrapper.focus`
+    even in Strict mode, so `Opening_the_editor_moves_focus_into_it` asserts the
+    interop call and does go red if the `FocusAsync` is removed;
   - `✕` never appears in edit mode. It means "cancel" everywhere else in the
     world, so the same glyph would sit one mis-click from "delete this row". The
     trash keeps its own shape and its own gap.

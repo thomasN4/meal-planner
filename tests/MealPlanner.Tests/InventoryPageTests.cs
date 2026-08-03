@@ -675,6 +675,85 @@ public class InventoryPageTests
         Assert.Contains(page.Log.Entries, e => e.Message.Contains("to 0 subscriber(s)", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Opening_the_editor_moves_focus_into_it()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.Find("button.item-edit").Click();
+
+        // bUnit has no focus model, so this asserts the framework interop call
+        // rather than where the caret ended up — but the call is the fix, and
+        // deleting the FocusAsync turns this red.
+        //
+        // Opening the editor removes the pencil that was clicked, so without it
+        // focus falls to <body>. The row's Enter and Escape handlers live on its
+        // inputs, which made Escape a no-op until the user clicked into a field,
+        // and left keyboard users tabbing back through the nav and the whole add
+        // form to reach a row they had just opened.
+        Assert.Contains(
+            page.JSInterop.Invocations,
+            i => i.Identifier == "Blazor._internal.domWrapper.focus");
+    }
+
+    [Fact]
+    public async Task A_draft_does_not_write_back_a_field_someone_else_changed()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cheddar", "1 block", IngredientCategory.Dairy);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dairy");
+        cut.Find("button.item-edit").Click();
+        cut.FindAll("tbody input")[2].Input("back of the fridge");
+
+        // Another tab, or the auto-categorizer a few seconds after an add.
+        await page.OutOfCircuitService().SetCategoryAsync("Cheddar", IngredientCategory.Snacks);
+
+        // The row re-renders under its new heading. The dropdown has to follow
+        // it: a row filed under Snacks whose own select reads Dairy is incoherent
+        // before anything is even saved.
+        cut.WaitForAssertion(() =>
+            Assert.Equal(
+                nameof(IngredientCategory.Snacks),
+                cut.Find("select.form-select-sm").GetAttribute("value")));
+
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        var stored = await page.Service.FindAsync("Cheddar");
+        // Saving must not revert a field the user never touched. The note they
+        // did type still has to land.
+        Assert.Equal(IngredientCategory.Snacks, stored!.Category);
+        Assert.Equal("back of the fridge", stored.Notes);
+    }
+
+    [Fact]
+    public async Task A_draft_keeps_the_value_the_user_typed_over_a_live_write()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cheddar", "1 block", IngredientCategory.Dairy);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dairy");
+        cut.Find("button.item-edit").Click();
+        cut.FindAll("tbody input")[1].Input("half a block");
+
+        await page.OutOfCircuitService().UpsertAsync("Cheddar", "2 blocks", IngredientCategory.Dairy);
+
+        // The other half of the rule: re-syncing untouched fields must never
+        // reach a box the user is in the middle of. Same line the add form's
+        // categoryTouched/quantityTouched draw.
+        cut.WaitForAssertion(() =>
+            Assert.Equal("half a block", cut.FindAll("tbody input")[1].GetAttribute("value")));
+
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        Assert.Equal("half a block", (await page.Service.FindAsync("Cheddar"))!.Quantity);
+    }
+
     /// <summary>The accordion button for a category, found by its visible label.</summary>
     private static IElement Header(IRenderedComponent<Inventory> cut, string label) =>
         cut.FindAll("button.category-toggle")

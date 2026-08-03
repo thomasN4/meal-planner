@@ -170,8 +170,10 @@ else
                                    value from before the last character. *@
                                 <td style="width: 30%">
                                     <input class="form-control form-control-sm edit-name"
+                                           @ref="editNameInput"
                                            aria-label="Name for @item.Name" maxlength="100"
                                            @bind="editName" @bind:event="oninput"
+                                           @bind:after="() => editNameTouched = true"
                                            @onkeydown="OnEditKeyDownAsync"/>
                                 </td>
                                 <td style="width: 25%">
@@ -179,6 +181,7 @@ else
                                            placeholder="e.g. 2 bags" maxlength="50"
                                            aria-label="Quantity for @item.Name"
                                            @bind="editQuantity" @bind:event="oninput"
+                                           @bind:after="() => editQuantityTouched = true"
                                            @onkeydown="OnEditKeyDownAsync"/>
                                 </td>
                                 <td style="width: 20%">
@@ -199,6 +202,7 @@ else
                                            placeholder="Notes" maxlength="500"
                                            aria-label="Notes for @item.Name"
                                            @bind="editNotes" @bind:event="oninput"
+                                           @bind:after="() => editNotesTouched = true"
                                            @onkeydown="OnEditKeyDownAsync"/>
                                 </td>
                                 <td style="width: 1%">
@@ -293,6 +297,23 @@ else
     private string editNotes = string.Empty;
     // Shown under the row being edited, not in the page's status region.
     private string? editError;
+    // Per-field, and the same idea as the add form's categoryTouched: a box the
+    // user has typed in is theirs until they save or cancel, and a box they have
+    // not is still just a picture of the row. Without these, opening an editor
+    // froze a snapshot of all four fields and Save wrote the whole snapshot back
+    // — so a category the auto-categorizer (or another tab) moved in the
+    // meantime got silently reverted by a user who only meant to fix a note.
+    private bool editNameTouched;
+    private bool editQuantityTouched;
+    private bool editCategoryTouched;
+    private bool editNotesTouched;
+    // Opening an editor removes the pencil that was clicked, so focus had
+    // nowhere to land and fell to <body>. That is not cosmetic: the row's Enter
+    // and Escape handlers live on its inputs, so Escape did nothing at all until
+    // the user clicked into a field, and a keyboard user had to tab back through
+    // the nav and the whole add form to reach the row they had just opened.
+    private ElementReference editNameInput;
+    private bool focusEditName;
 
     private const string SuggestionListId = "name-suggestions";
 
@@ -337,6 +358,7 @@ else
             // field that Add would then write back as empty, which is the
             // exact footgun this whole feature exists to close.
             SyncToName();
+            SyncDraftToRow();
             DropEditIfRowIsGone();
             StateHasChanged();
         });
@@ -541,12 +563,58 @@ else
         editCategory = item.Category;
         editNotes = item.Notes ?? string.Empty;
         editError = null;
+        editNameTouched = false;
+        editQuantityTouched = false;
+        editCategoryTouched = false;
+        editNotesTouched = false;
+        focusEditName = true;
+    }
+
+    // The editor's inputs do not exist until the render this flag survives into,
+    // so the focus call has to wait for it rather than happen in BeginEdit.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!focusEditName) return;
+        focusEditName = false;
+
+        // The row can be gone already — an out-of-circuit delete between the
+        // click and this render — in which case there is no input to focus and
+        // DropEditIfRowIsGone has already closed the editor.
+        if (editingId is null) return;
+
+        try
+        {
+            await editNameInput.FocusAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit went away between render and focus. Nothing to do,
+            // and nothing worth logging — the page is gone.
+        }
     }
 
     private void CancelEdit()
     {
         editingId = null;
         editError = null;
+    }
+
+    // The counterpart to DropEditIfRowIsGone, for a row that changed rather than
+    // vanished. Only boxes the user has left alone follow the row; anything they
+    // have typed in is theirs. Without this the editor shows a row filed under
+    // one category heading while its own dropdown reads another, and Save then
+    // writes the stale one back over whoever moved it.
+    private void SyncDraftToRow()
+    {
+        if (editingId is not { } id || items?.FirstOrDefault(i => i.Id == id) is not { } row)
+        {
+            return;
+        }
+
+        if (!editNameTouched) editName = row.Name;
+        if (!editQuantityTouched) editQuantity = row.Quantity;
+        if (!editCategoryTouched) editCategory = row.Category;
+        if (!editNotesTouched) editNotes = row.Notes ?? string.Empty;
     }
 
     private async Task SaveEditAsync()
@@ -589,6 +657,7 @@ else
             && Enum.IsDefined(category))
         {
             editCategory = category;
+            editCategoryTouched = true;
         }
     }
 
