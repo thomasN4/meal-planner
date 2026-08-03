@@ -148,6 +148,16 @@ else
     private Task OnInventoryChangedAsync(InventoryChange change) =>
         InvokeAsync(async () =>
         {
+            // PreviousCategory is set only by SetCategoryAsync, i.e. only when a
+            // row has just moved groups — the auto-categorizer's second write a
+            // few seconds after an add, or someone's dropdown. Open the
+            // destination, or the item silently vanishes into a collapsed
+            // category right after the user watched it land in Other.
+            if (change.PreviousCategory is not null)
+            {
+                ExpandCategory(change.Category);
+            }
+
             await RefreshAsync();
             StateHasChanged();
         });
@@ -169,7 +179,9 @@ else
         if (string.IsNullOrWhiteSpace(newName)) return;
         var change = await Svc.UpsertAsync(newName, newQuantity, newCategory);
         // Use the returned category: upsert can land on an existing row whose
-        // category differs from what the form still held.
+        // category differs from what the form still held. Still needed despite
+        // the notifier: an upsert reports no PreviousCategory, so a create has
+        // nothing there to recognise as a move.
         ExpandCategory(change.Category);
         // Clear the form before showing the status, never after: the dismissal
         // delay used to be awaited here, which left the just-added name sitting
@@ -244,7 +256,8 @@ else
             return;
         }
 
-        ExpandCategory(category);
+        // No ExpandCategory here: this write publishes, and the notifier above
+        // opens the destination for every category move, wherever it came from.
         await Svc.SetCategoryAsync(item.Name, category);
     }
 
