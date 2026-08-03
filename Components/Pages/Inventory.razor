@@ -43,6 +43,16 @@
                         disabled="@string.IsNullOrWhiteSpace(newName)">Add</button>
             </div>
         </div>
+        @* The live region stays in the DOM and only its contents change —
+           screen readers announce mutations inside a region they already know
+           about, not one that arrives with its text already in it. Empty, the
+           wrapper has no height, so the margin lives on the alert. *@
+        <div role="status">
+            @if (statusMessage is not null)
+            {
+                <div class="alert alert-success py-2 mt-3 mb-0">@statusMessage</div>
+            }
+        </div>
     </div>
 </div>
 
@@ -58,40 +68,66 @@ else
 {
     @foreach (var group in items.GroupBy(i => i.Category).OrderBy(g => g.Key))
     {
-        <h5 class="mt-3">@Pretty(group.Key)</h5>
-        <table class="table table-sm align-middle">
-            <tbody>
-            @foreach (var item in group.OrderBy(i => i.Name))
+        var category = group.Key;
+        var isOpen = expandedCategories.Contains(category);
+        @* Key the group too: without it, deleting the last item in a category
+           shifts the ones below onto the DOM of the group above, which lands a
+           focus ring on a header nobody clicked — the row bug one level up. *@
+        <div class="category-group mt-3" @key="category">
+            @* Heading wraps the button, not the reverse: a button takes phrasing
+               content only, and the categories belong in the heading outline.
+               aria-expanded must be a string — Blazor drops a false bool
+               attribute entirely, so the collapsed state went unannounced. *@
+            <h5 class="mb-0">
+                <button type="button"
+                        class="category-toggle btn btn-link text-decoration-none p-0 d-flex align-items-center gap-2 w-100"
+                        @onclick="() => ToggleCategory(category)"
+                        aria-expanded="@(isOpen ? "true" : "false")">
+                    <span class="category-chevron @(isOpen ? "open" : null)" aria-hidden="true">▸</span>
+                    <span class="category-label">@Pretty(category)</span>
+                    <span class="text-muted small">(@group.Count())</span>
+                </button>
+            </h5>
+            @if (isOpen)
             {
-                <tr>
-                    <td style="width: 30%">@item.Name</td>
-                    <td style="width: 25%">
-                        <input class="form-control form-control-sm"
-                               value="@item.Quantity"
-                               placeholder="e.g. 2 bags" maxlength="50"
-                               @onchange="e => ChangeQuantityAsync(item, e)"/>
-                    </td>
-                    <td style="width: 20%">
-                        <select class="form-select form-select-sm"
-                                value="@item.Category"
-                                aria-label="Category for @item.Name"
-                                @onchange="e => ChangeCategoryAsync(item, e)">
-                            @foreach (var c in Enum.GetValues<IngredientCategory>())
-                            {
-                                <option value="@c">@Pretty(c)</option>
-                            }
-                        </select>
-                    </td>
-                    <td class="text-muted small">@item.Notes</td>
-                    <td style="width: 1%">
-                        <button class="btn btn-outline-danger btn-sm"
-                                @onclick="() => DeleteAsync(item.Id)"
-                                aria-label="Remove @item.Name">✕</button>
-                    </td>
-                </tr>
+                <table class="table table-sm align-middle mt-2">
+                    <tbody>
+                    @foreach (var item in group.OrderBy(i => i.Name))
+                    {
+                        @* Key by id so a deleted row's DOM (and its focus) is
+                           torn down rather than patched onto the next item —
+                           otherwise the blue ring on ✕ sticks to the survivor. *@
+                        <tr @key="item.Id">
+                            <td style="width: 30%">@item.Name</td>
+                            <td style="width: 25%">
+                                <input class="form-control form-control-sm"
+                                       value="@item.Quantity"
+                                       placeholder="e.g. 2 bags" maxlength="50"
+                                       @onchange="e => ChangeQuantityAsync(item, e)"/>
+                            </td>
+                            <td style="width: 20%">
+                                <select class="form-select form-select-sm"
+                                        value="@item.Category"
+                                        aria-label="Category for @item.Name"
+                                        @onchange="e => ChangeCategoryAsync(item, e)">
+                                    @foreach (var c in Enum.GetValues<IngredientCategory>())
+                                    {
+                                        <option value="@c">@Pretty(c)</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="text-muted small">@item.Notes</td>
+                            <td style="width: 1%">
+                                <button class="btn btn-outline-danger btn-sm item-remove"
+                                        @onclick="() => DeleteAsync(item.Id)"
+                                        aria-label="Remove @item.Name">✕</button>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
             }
-            </tbody>
-        </table>
+        </div>
     }
 }
 
@@ -100,6 +136,12 @@ else
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
+    private string? statusMessage;
+    private CancellationTokenSource? statusCts;
+    private static readonly TimeSpan StatusDuration = TimeSpan.FromSeconds(3);
+    // Categories start collapsed; only ones the user opens stay open across
+    // live refreshes (MCP / other circuits). HashSet so toggle is O(1).
+    private readonly HashSet<IngredientCategory> expandedCategories = [];
 
     protected override void OnInitialized()
     {
@@ -120,22 +162,97 @@ else
     private Task OnInventoryChangedAsync(InventoryChange change) =>
         InvokeAsync(async () =>
         {
+            // PreviousCategory is set only by SetCategoryAsync, i.e. only when a
+            // row has just moved groups — the auto-categorizer's second write a
+            // few seconds after an add, or someone's dropdown. Open the
+            // destination, or the item silently vanishes into a collapsed
+            // category right after the user watched it land in Other.
+            if (change.PreviousCategory is not null)
+            {
+                ExpandCategory(change.Category);
+            }
+
             await RefreshAsync();
             StateHasChanged();
         });
 
     private async Task RefreshAsync() => items = await Svc.GetAllAsync();
 
+    private void ToggleCategory(IngredientCategory category)
+    {
+        if (!expandedCategories.Remove(category))
+            expandedCategories.Add(category);
+    }
+
+    // Ensure the destination is visible so the user sees the row land there.
+    private void ExpandCategory(IngredientCategory category) =>
+        expandedCategories.Add(category);
+
     private async Task AddAsync()
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        // Use the returned category: upsert can land on an existing row whose
+        // category differs from what the form still held. Still needed despite
+        // the notifier: an upsert reports no PreviousCategory, so a create has
+        // nothing there to recognise as a move.
+        ExpandCategory(change.Category);
+        // Clear the form before showing the status, never after: the dismissal
+        // delay used to be awaited here, which left the just-added name sitting
+        // in the box for a full three seconds and then wiped whatever had been
+        // typed in the meantime.
         newName = string.Empty;
         newQuantity = string.Empty;
         // Reset too: a category left over from the last add silently attached
         // itself to the next ingredient, which is most of why everything ended
         // up needing sorting out by hand in the first place.
         newCategory = IngredientCategory.Other;
+        ShowStatus(change.Describe());
+    }
+
+    // Ephemeral success line under the add form. A new add cancels the previous
+    // timer so rapid entry never leaves a stale message behind.
+    private void ShowStatus(string message)
+    {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
+        statusCts = new CancellationTokenSource();
+
+        statusMessage = message;
+        // Paint it now. A handler re-renders only at its first incomplete await
+        // and again on completion, so a message set and cleared between those
+        // two points never reaches the browser — which is exactly what happened
+        // once the write above yielded for real (a second circuit subscribed to
+        // the notifier is enough to move the first yield earlier).
+        StateHasChanged();
+
+        // The one deliberately unawaited call on this page. AGENTS.md bans
+        // fire-and-forget because it loses the re-render and swallows
+        // exceptions; both are handled explicitly in the method below, and the
+        // timer has to outlive the handler or the add form freezes again.
+        _ = DismissStatusAsync(statusCts.Token);
+    }
+
+    private async Task DismissStatusAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(StatusDuration, token);
+            statusMessage = null;
+            // Nothing else is rendering by now — the handler that showed the
+            // message finished long ago — so ask for the pass ourselves.
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // The next add, or disposal — expected.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish. A
+            // stale alert is harmless; losing the reason for it is not.
+            Logger.LogWarning(ex, "Could not clear the inventory status message");
+        }
     }
 
     private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
@@ -153,6 +270,8 @@ else
             return;
         }
 
+        // No ExpandCategory here: this write publishes, and the notifier above
+        // opens the destination for every category move, wherever it came from.
         await Svc.SetCategoryAsync(item.Name, category);
     }
 
@@ -160,9 +279,11 @@ else
     {
         await Svc.DeleteAsync(id);
     }
-    
+
     public void Dispose()
     {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
         Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }

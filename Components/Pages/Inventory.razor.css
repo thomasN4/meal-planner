@@ -1,0 +1,46 @@
+.category-toggle {
+    text-align: left;
+    /* .btn pins font-size to 1rem, which would shrink the enclosing h5. */
+    font-size: inherit;
+}
+
+/* Kill the sticky blue focus ring after a mouse click (app.css styles
+   .btn:focus). Keep a ring for keyboard focus via :focus-visible. */
+.category-toggle:focus,
+.item-remove:focus {
+    box-shadow: none;
+    outline: none;
+}
+
+.category-toggle:focus-visible,
+.item-remove:focus-visible {
+    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+    outline: none;
+}
+
+/* Colour the label, not the button: btn-link would otherwise paint the header
+   link-blue, and Bootstrap's .text-body fix for that is !important, which no
+   hover rule on the button itself can outrank. A child with its own colour
+   can. */
+.category-label {
+    color: var(--bs-body-color);
+}
+
+.category-toggle:hover .category-label,
+.category-toggle:focus-visible .category-label {
+    color: #1b6ec2;
+}
+
+.category-chevron {
+    display: inline-block;
+    width: 1rem;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    line-height: 1;
+    color: #6c757d;
+    transition: transform 0.15s ease;
+}
+
+.category-chevron.open {
+    transform: rotate(90deg);
+}
