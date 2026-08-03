@@ -16,17 +16,59 @@
     <div class="card-body">
         <div class="row g-2 align-items-end">
             <div class="col-md-4">
-                <label class="form-label mb-1">Ingredient</label>
-                <input class="form-control" placeholder="e.g. Coriander"
-                       @bind="newName" @bind:event="oninput"
-                       @onkeydown="@(async e =>
-                                   {
-                                       if (e.Key == "Enter") await AddAsync();
-                                   })"/>
+                <label class="form-label mb-1" for="new-name">Ingredient</label>
+                @* The wrapper is the positioning anchor for the suggestion
+                   list, which would otherwise hang off the card. *@
+                <div class="name-combobox">
+                    @* @bind:after, not a separate @oninput: a handler cannot
+                       share the event with @bind, and rewriting this to
+                       value=/@oninput would put the Add button's disabled
+                       state on a field the handler has to remember to assign.
+                       @bind:event="oninput" stays exactly as AGENTS.md
+                       describes it — the per-keystroke round trip now drives
+                       matching too, which is more reason to keep it. *@
+                    <input class="form-control" id="new-name" placeholder="e.g. Coriander"
+                           maxlength="100" autocomplete="off"
+                           @bind="newName" @bind:event="oninput" @bind:after="OnNameChanged"
+                           @onkeydown="OnNameKeyDownAsync"
+                           @onblur="CloseSuggestions"
+                           role="combobox" aria-autocomplete="list"
+                           aria-expanded="@(IsListOpen ? "true" : "false")"
+                           aria-controls="@(IsListOpen ? SuggestionListId : null)"
+                           aria-activedescendant="@ActiveOptionId"/>
+                    @if (IsListOpen)
+                    {
+                        @* preventDefault on mousedown rather than a timer on
+                           blur: it stops the input losing focus at all, so
+                           @onblur never fires ahead of the click that picks a
+                           row. On the <ul> too, for clicks that land on the
+                           padding or the scrollbar. *@
+                        <ul class="name-suggestions" id="@SuggestionListId" role="listbox"
+                            aria-label="Matching ingredients" @onmousedown:preventDefault>
+                            @for (var index = 0; index < suggestions.Count; index++)
+                            {
+                                var item = suggestions[index];
+                                var isActive = index == highlightedIndex;
+                                @* aria-selected is a string for the same
+                                   reason as the accordion's aria-expanded:
+                                   Blazor drops a false bool attribute. *@
+                                <li class="name-suggestion @(isActive ? "highlighted" : null)"
+                                    id="@OptionId(index)" role="option"
+                                    aria-selected="@(isActive ? "true" : "false")"
+                                    @key="item.Id" @onmousedown:preventDefault
+                                    @onclick="() => ApplySuggestion(item)">
+                                    <span>@item.Name</span>
+                                    <span class="text-muted small">@Pretty(item.Category)</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
             </div>
             <div class="col-md-3">
-                <label class="form-label mb-1">Category</label>
-                <select class="form-select" @bind="newCategory">
+                <label class="form-label mb-1" for="new-category">Category</label>
+                <select class="form-select" id="new-category"
+                        @bind="newCategory" @bind:after="OnCategoryTouched">
                     @foreach (var c in Enum.GetValues<IngredientCategory>())
                     {
                         <option value="@c">@Pretty(c)</option>
@@ -34,14 +76,28 @@
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="form-label mb-1">Quantity</label>
-                <input class="form-control" placeholder="e.g. 2 bags"
-                       @bind="newQuantity" maxlength="50"/>
+                <label class="form-label mb-1" for="new-quantity">Quantity</label>
+                <input class="form-control" id="new-quantity" placeholder="e.g. 2 bags"
+                       @bind="newQuantity" @bind:after="OnQuantityTouched" maxlength="50"/>
             </div>
             <div class="col-md-2">
+                @* "Update" once the name lands on an existing row: the
+                   strongest available statement that Add is about to
+                   overwrite something rather than create it. *@
                 <button class="btn btn-primary w-100" @onclick="AddAsync"
-                        disabled="@string.IsNullOrWhiteSpace(newName)">Add</button>
+                        disabled="@string.IsNullOrWhiteSpace(newName)">@(matchedItem is null ? "Add" : "Update")</button>
             </div>
+        </div>
+        @* Outside the row on purpose: the row is align-items-end, so anything
+           added under the input inside its own column lifts that input out of
+           line with the other three. Live, but deliberately not role=status —
+           the add-result region below owns that role, and more than one
+           element answering to it would break the page's own tests. *@
+        <div class="name-hint" aria-live="polite">
+            @if (matchedItem is not null)
+            {
+                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()</span>
+            }
         </div>
         @* The live region stays in the DOM and only its contents change —
            screen readers announce mutations inside a region they already know
@@ -143,6 +199,24 @@ else
     // live refreshes (MCP / other circuits). HashSet so toggle is O(1).
     private readonly HashSet<IngredientCategory> expandedCategories = [];
 
+    // Name-matching state. All of it is derived from `items` and `newName`, but
+    // it is stored rather than recomputed at render time so the highlight
+    // survives a re-render and the matcher runs once per change, not per paint.
+    private IReadOnlyList<InventoryItem> suggestions = [];
+    private int highlightedIndex = -1;   // -1 = nothing highlighted, Enter adds
+    private bool suggestionsDismissed;   // Escape or blur; typing clears it
+    private InventoryItem? matchedItem;  // the row an exact name is editing
+    // Autofill writes only into boxes the user has left alone. Both flip the
+    // moment the user commits a value of their own, and reset on add.
+    private bool categoryTouched;
+    private bool quantityTouched;
+
+    private const string SuggestionListId = "name-suggestions";
+
+    private bool IsListOpen => suggestions.Count > 0 && !suggestionsDismissed;
+    private string? ActiveOptionId => highlightedIndex >= 0 ? OptionId(highlightedIndex) : null;
+    private static string OptionId(int index) => $"name-suggestion-{index}";
+
     protected override void OnInitialized()
     {
         // The single refresh path for this page: out-of-circuit writers (MCP /
@@ -173,10 +247,113 @@ else
             }
 
             await RefreshAsync();
+            // The row the name box is pointing at may be the one that just
+            // changed — an MCP tool or another tab can create it, delete it or
+            // re-quantify it. Re-deriving keeps the hint honest; leaving it
+            // stale would put "Updating Salt · 1 box" above an empty Quantity
+            // field that Add would then write back as empty, which is the
+            // exact footgun this whole feature exists to close.
+            SyncToName();
             StateHasChanged();
         });
 
     private async Task RefreshAsync() => items = await Svc.GetAllAsync();
+
+    // The one place the matching rule lives. Called from the name box's
+    // @bind:after and from the notifier above, so a live write and a keystroke
+    // land the form in the same state.
+    private void SyncToName()
+    {
+        suggestions = IngredientMatcher.Suggest(items, newName);
+        // Every recompute drops the highlight: the list under the box has just
+        // changed, so an index into the old one points at the wrong row, and
+        // Enter must go back to meaning "add" until the user arrows on purpose.
+        highlightedIndex = -1;
+
+        var match = IngredientMatcher.ExactMatch(items, newName);
+        if (match is not null)
+        {
+            if (!categoryTouched) newCategory = match.Category;
+            if (!quantityTouched) newQuantity = match.Quantity;
+        }
+        else if (matchedItem is not null)
+        {
+            // Only on the match → no-match transition. A name that never
+            // matched anything must not have the form emptied out underneath
+            // it while the user is still typing it.
+            if (!categoryTouched) newCategory = IngredientCategory.Other;
+            if (!quantityTouched) newQuantity = string.Empty;
+        }
+
+        matchedItem = match;
+    }
+
+    // Typing reopens a list that Escape or a blur closed.
+    private void OnNameChanged()
+    {
+        suggestionsDismissed = false;
+        SyncToName();
+    }
+
+    private void OnCategoryTouched() => categoryTouched = true;
+
+    private void OnQuantityTouched() => quantityTouched = true;
+
+    private async Task OnNameKeyDownAsync(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                MoveHighlight(1);
+                break;
+            case "ArrowUp":
+                MoveHighlight(-1);
+                break;
+            case "Escape":
+                CloseSuggestions();
+                break;
+            case "Enter" when highlightedIndex >= 0 && highlightedIndex < suggestions.Count:
+                ApplySuggestion(suggestions[highlightedIndex]);
+                break;
+            case "Enter":
+                // Unchanged from before suggestions existed: with nothing
+                // arrowed onto, Enter still adds. That is the muscle memory
+                // the page already has.
+                await AddAsync();
+                break;
+        }
+    }
+
+    // Cycles -1, 0 … n-1 and wraps. -1 stays reachable on purpose: it is how
+    // the user gets back to "Enter adds what I typed" without pressing Escape.
+    private void MoveHighlight(int delta)
+    {
+        suggestionsDismissed = false;
+        if (suggestions.Count == 0) return;
+
+        var slots = suggestions.Count + 1;
+        highlightedIndex = (((highlightedIndex + 1 + delta) % slots + slots) % slots) - 1;
+    }
+
+    private void CloseSuggestions()
+    {
+        suggestionsDismissed = true;
+        highlightedIndex = -1;
+    }
+
+    private void ApplySuggestion(InventoryItem item)
+    {
+        newName = item.Name;
+        // An explicit pick clears both flags: choosing a row by hand says
+        // "I mean this one" in a way that typing a near-miss never does.
+        categoryTouched = false;
+        quantityTouched = false;
+        SyncToName();
+        // The name is an exact match now, so Suggest drops it — but a longer
+        // name may still have it as a prefix ("Salt" → "Salted butter"), and
+        // the user is done choosing either way.
+        suggestionsDismissed = true;
+    }
 
     private void ToggleCategory(IngredientCategory category)
     {
@@ -209,7 +386,21 @@ else
         // itself to the next ingredient, which is most of why everything ended
         // up needing sorting out by hand in the first place.
         newCategory = IngredientCategory.Other;
+        // After the await, never before: the upsert above publishes, and the
+        // notifier handler runs SyncToName() while newName still holds the
+        // name that was typed. Resetting first would just be undone.
+        ResetMatchState();
         ShowStatus(change.Describe());
+    }
+
+    private void ResetMatchState()
+    {
+        suggestions = [];
+        highlightedIndex = -1;
+        suggestionsDismissed = false;
+        matchedItem = null;
+        categoryTouched = false;
+        quantityTouched = false;
     }
 
     // Ephemeral success line under the add form. A new add cancels the previous
@@ -289,6 +480,27 @@ else
         Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }
+
+    // The hint describes the write, not the row. Once the user edits a box the
+    // two diverge — and this line is the only warning of what Add is about to
+    // overwrite, so it saying "· infinite" while Update writes "half a jar"
+    // defeats the point of having it. Same "before → after" idiom as
+    // InventoryChange.Describe(), which reports the same edit after the fact.
+    private string HintCategory() =>
+        matchedItem is null || newCategory == matchedItem.Category
+            ? Pretty(newCategory)
+            : $"{Pretty(matchedItem.Category)} → {Pretty(newCategory)}";
+
+    private string HintQuantity() =>
+        matchedItem is null || newQuantity == matchedItem.Quantity
+            ? DisplayQuantity(newQuantity)
+            : $"{DisplayQuantity(matchedItem.Quantity)} → {DisplayQuantity(newQuantity)}";
+
+    // Matches InventoryChange.Describe()'s wording for an empty quantity, so
+    // the hint and the status line below it don't call the same thing two
+    // different things.
+    private static string DisplayQuantity(string quantity) =>
+        string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
 
     private static string Pretty(IngredientCategory c) => c switch
     {
