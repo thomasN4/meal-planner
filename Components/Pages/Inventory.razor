@@ -181,7 +181,9 @@ else
     private void ToggleCategory(IngredientCategory category)
     {
         if (!expandedCategories.Remove(category))
+        {
             expandedCategories.Add(category);
+        }
     }
 
     // Ensure the destination is visible so the user sees the row land there.
