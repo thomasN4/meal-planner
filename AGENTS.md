@@ -200,13 +200,24 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     Dairy under a Snacks heading, and a user fixing a note silently reverted it.
     Untouched boxes follow the row; typed ones are the user's. Same line the add
     form's `categoryTouched`/`quantityTouched` draw, for the same reason;
-  - the editor focuses its name input on open (`OnAfterRenderAsync` +
-    `ElementReference`). Not cosmetic: opening removes the pencil that was
-    clicked, so focus fell to `<body>`, and since Enter/Escape live on the row's
+  - the editor moves focus deliberately at both ends (`OnAfterRenderAsync` +
+    `ElementReference`): to the name input on open, back to the row's pencil on
+    Save/Cancel. Not cosmetic — each transition removes the element that had
+    focus, so it fell to `<body>`, and since Enter/Escape live on the row's
     inputs, **Escape did nothing at all** until the user clicked into a field.
-    bUnit has no focus model but does service `Blazor._internal.domWrapper.focus`
-    even in Strict mode, so `Opening_the_editor_moves_focus_into_it` asserts the
-    interop call and does go red if the `FocusAsync` is removed;
+    Three things worth knowing here:
+    - `@ref` takes any *assignable* expression, an indexer included, so
+      `@ref="pencils[item.Id]"` gives one capture per row. There is no need to
+      duplicate the pencil markup across a conditional to get a ref to one row;
+    - Blazor does **not** clear an element-ref capture when the element goes, so
+      `RefreshAsync` prunes `pencils` against the live ids. Circuits here are
+      long-lived and the alternative is a stale entry per deleted row, forever;
+    - bUnit has no focus model but does service
+      `Blazor._internal.domWrapper.focus` even in Strict mode, so both focus
+      tests assert that invocation and both go red when their `FocusAsync` is
+      removed. The close test **counts** invocations rather than asserting
+      presence — opening already made one, so a bare `Contains` passes with the
+      close doing nothing;
   - `✕` never appears in edit mode. It means "cancel" everywhere else in the
     world, so the same glyph would sit one mis-click from "delete this row". The
     trash keeps its own shape and its own gap.

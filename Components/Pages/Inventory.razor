@@ -232,6 +232,7 @@ else
                                 <td class="text-muted small">@item.Notes</td>
                                 <td style="width: 1%">
                                     <button class="btn btn-outline-secondary btn-sm item-edit"
+                                            @ref="pencils[item.Id]"
                                             @onclick="() => BeginEdit(item)"
                                             aria-label="Edit @item.Name">✎</button>
                                 </td>
@@ -314,6 +315,12 @@ else
     // the nav and the whole add form to reach the row they had just opened.
     private ElementReference editNameInput;
     private bool focusEditName;
+    // Closing an editor loses focus the same way opening one did — the inputs go
+    // and the pencil comes back. @ref takes any assignable expression, an
+    // indexer included, so one capture per row costs a dictionary rather than
+    // the pencil markup duplicated across a conditional.
+    private readonly Dictionary<int, ElementReference> pencils = [];
+    private int? focusPencilId;
 
     private const string SuggestionListId = "name-suggestions";
 
@@ -363,7 +370,18 @@ else
             StateHasChanged();
         });
 
-    private async Task RefreshAsync() => items = await Svc.GetAllAsync();
+    private async Task RefreshAsync()
+    {
+        items = await Svc.GetAllAsync();
+        // Blazor does not clear an element-ref capture when the element goes, so
+        // without this the dictionary keeps a stale entry per deleted row for
+        // the life of the circuit — and these circuits are long-lived.
+        var live = items.Select(i => i.Id).ToHashSet();
+        foreach (var id in pencils.Keys.Where(id => !live.Contains(id)).ToList())
+        {
+            pencils.Remove(id);
+        }
+    }
 
     // The one place the matching rule lives. Called from the name box's
     // @bind:after and from the notifier above, so a live write and a keystroke
@@ -574,17 +592,12 @@ else
     // so the focus call has to wait for it rather than happen in BeginEdit.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!focusEditName) return;
-        focusEditName = false;
-
-        // The row can be gone already — an out-of-circuit delete between the
-        // click and this render — in which case there is no input to focus and
-        // DropEditIfRowIsGone has already closed the editor.
-        if (editingId is null) return;
+        var target = NextFocusTarget();
+        if (target is not { } element) return;
 
         try
         {
-            await editNameInput.FocusAsync();
+            await element.FocusAsync();
         }
         catch (JSDisconnectedException)
         {
@@ -593,8 +606,32 @@ else
         }
     }
 
+    // Both flags are cleared whether or not a target turns up, so a row that
+    // vanished between the click and this render doesn't leave the page trying
+    // to focus it again on every subsequent paint.
+    private ElementReference? NextFocusTarget()
+    {
+        if (focusEditName)
+        {
+            focusEditName = false;
+            // The row can be gone already — an out-of-circuit delete between the
+            // click and this render — in which case there is no input to focus
+            // and DropEditIfRowIsGone has already closed the editor.
+            return editingId is null ? null : editNameInput;
+        }
+
+        if (focusPencilId is { } id)
+        {
+            focusPencilId = null;
+            return pencils.TryGetValue(id, out var pencil) ? pencil : null;
+        }
+
+        return null;
+    }
+
     private void CancelEdit()
     {
+        focusPencilId = editingId;
         editingId = null;
         editError = null;
     }
@@ -633,6 +670,7 @@ else
             return;
         }
 
+        focusPencilId = id;
         editingId = null;
         editError = null;
         // No RefreshAsync: the write above published, and the notifier handler

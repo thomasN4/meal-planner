@@ -700,6 +700,29 @@ public class InventoryPageTests
     }
 
     [Fact]
+    public async Task Closing_the_editor_puts_focus_back_on_the_pencil()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = page.JSInterop.Invocations.Count(
+            i => i.Identifier == "Blazor._internal.domWrapper.focus");
+
+        cut.Find("button.item-cancel").Click();
+
+        // The mirror of opening: the editor's inputs go and the pencil comes
+        // back, so focus falls to <body> unless it is put somewhere. Counting
+        // rather than just asserting presence — the open already made one call,
+        // so a bare Contains would pass with the close doing nothing.
+        Assert.Equal(
+            afterOpening + 1,
+            page.JSInterop.Invocations.Count(
+                i => i.Identifier == "Blazor._internal.domWrapper.focus"));
+    }
+
+    [Fact]
     public async Task A_draft_does_not_write_back_a_field_someone_else_changed()
     {
         await using var page = await PageHarness.CreateAsync();
