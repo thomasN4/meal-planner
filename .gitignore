@@ -3,6 +3,10 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+# Anything hanging off a database file too: manual testing leaves things like
+# mealplanner.db.testbackup-182628, which *.db does not match, and a stray
+# git add -A then sweeps the kitchen's data into a commit.
+*.db.*
 .idea/
 *.DotSettings.user
 .claude/
