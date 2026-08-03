@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using MealPlanner.Models;
 
 namespace MealPlanner.Services;
@@ -36,6 +38,15 @@ internal static class IngredientMatcher
     /// case — SQLite's NOCASE collation makes "Salt" and "salt" one row in the
     /// database, but it does not reach in-memory C#, so the comparison has to
     /// say so itself.
+    /// <para>
+    /// Deliberately strict where <see cref="Suggest"/> is loose: it does
+    /// <em>not</em> fold accents. The form autofills from this and then upserts
+    /// under the name the user typed, and "nuoc cham" is not the same row as
+    /// "nước chấm" to SQLite's NOCASE index — matching them here would silently
+    /// create a duplicate under the unaccented spelling. Accented names are
+    /// reachable through the suggestion list, which fills the box with the
+    /// stored name before anything is written.
+    /// </para>
     /// </summary>
     internal static InventoryItem? ExactMatch(IReadOnlyList<InventoryItem>? items, string? name)
     {
@@ -58,7 +69,16 @@ internal static class IngredientMatcher
 
     /// <summary>
     /// Near matches for <paramref name="query"/>, best first: names that start
-    /// with it, then names that contain it, then names within a typo's reach.
+    /// with it, then names that contain it, then names within a typo's reach,
+    /// then names with a <em>word</em> within a typo's reach.
+    /// <para>
+    /// Comparison is accent-folded, because half this kitchen is names nobody
+    /// can type on the keyboard they own — "nuoc cham" has to find "nước chấm".
+    /// The word-level pass exists for the same reason from the other side: most
+    /// rows here are long and descriptive, so a misspelling lands far outside a
+    /// whole-string budget. "spagetti" is 13 edits from "dry spaghetti
+    /// noodles" and one edit from a word in it.
+    /// </para>
     /// <para>
     /// An exact match is deliberately left out. The form states that case
     /// outright in its own hint, and a row in this list can be arrowed onto —
@@ -76,7 +96,11 @@ internal static class IngredientMatcher
         var text = query?.Trim();
         if (string.IsNullOrEmpty(text)) return [];
 
-        var budget = MaxDistanceFor(text.Length);
+        // Folded once; every name below is compared against this.
+        var needle = Fold(text);
+        if (needle.Length == 0) return [];
+
+        var budget = MaxDistanceFor(needle.Length);
         var scored = new List<(InventoryItem Item, int Rank, int Distance)>();
 
         foreach (var item in items)
@@ -87,25 +111,42 @@ internal static class IngredientMatcher
                 continue;
             }
 
-            if (name.StartsWith(text, StringComparison.OrdinalIgnoreCase))
+            // Folded strings are already lower-cased, so Ordinal is right here
+            // — OrdinalIgnoreCase would only pay for a comparison already done.
+            var hay = Fold(name);
+
+            if (hay.StartsWith(needle, StringComparison.Ordinal))
             {
                 scored.Add((item, 0, 0));
             }
-            else if (name.Contains(text, StringComparison.OrdinalIgnoreCase))
+            else if (hay.Contains(needle, StringComparison.Ordinal))
             {
                 scored.Add((item, 1, 0));
             }
-            else if (budget > 0
-                     && Math.Abs(name.Length - text.Length) <= budget
-                     && name.Length <= MaxDistanceInput
-                     && text.Length <= MaxDistanceInput)
+            else if (budget > 0)
             {
-                // The length checks above are what keep a keystroke cheap: the
-                // table below only runs for rows that could still be in reach.
-                var distance = Distance(name, text, budget);
+                // The length check is what keeps a keystroke cheap: the table
+                // only runs for rows that could still be in reach.
+                var distance = Math.Abs(hay.Length - needle.Length) <= budget
+                               && hay.Length <= MaxDistanceInput
+                               && needle.Length <= MaxDistanceInput
+                    ? Distance(hay, needle, budget)
+                    : budget + 1;
+
                 if (distance <= budget)
                 {
                     scored.Add((item, 2, distance));
+                }
+                else
+                {
+                    var word = ClosestWordDistance(hay, needle, budget);
+                    if (word <= budget)
+                    {
+                        // Ranked below whole-name hits on purpose: matching one
+                        // word out of five is a weaker claim than matching the
+                        // name, and it is the pass most likely to be wrong.
+                        scored.Add((item, 3, word));
+                    }
                 }
             }
         }
@@ -121,6 +162,96 @@ internal static class IngredientMatcher
             .Take(limit)
             .Select(s => s.Item)
             .ToList();
+    }
+
+    /// <summary>
+    /// Lower-cases and strips accents, so a name can be found by typing what is
+    /// on the keyboard: "nuoc cham" reaches "nước chấm", "banh da cua" reaches
+    /// "dry Bánh Đa Cua noodles".
+    /// <para>
+    /// Decomposing to FormD turns an accented letter into a base letter plus a
+    /// combining mark, which is then dropped — that covers ơ and ư, whose horns
+    /// are combining marks. It does not cover đ, ø or ł, which are separate
+    /// letters with nothing to decompose, so those are mapped by hand. đ is the
+    /// one that actually matters here.
+    /// </para>
+    /// </summary>
+    private static string Fold(string value)
+    {
+        string decomposed;
+        try
+        {
+            decomposed = value.Normalize(NormalizationForm.FormD);
+        }
+        catch (ArgumentException)
+        {
+            // Normalize rejects invalid Unicode, and this string came off a
+            // LAN-facing text box. A lone surrogate should make matching miss,
+            // not throw on every keystroke.
+            decomposed = value;
+        }
+
+        var builder = new StringBuilder(decomposed.Length);
+        foreach (var ch in decomposed)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.NonSpacingMark)
+            {
+                continue;
+            }
+
+            builder.Append(char.ToLowerInvariant(Unstroke(ch)));
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>Letters that carry a stroke rather than a combining mark.</summary>
+    private static char Unstroke(char c) => c switch
+    {
+        'Đ' or 'đ' => 'd',
+        'Ø' or 'ø' => 'o',
+        'Ł' or 'ł' => 'l',
+        _ => c,
+    };
+
+    /// <summary>
+    /// The smallest edit distance between <paramref name="needle"/> and any one
+    /// word of <paramref name="hay"/>. Both are already folded.
+    /// <para>
+    /// Words are runs of letters and digits, so "lao gan ma (peanuts)" and
+    /// "dry-fried salmon" break up the way a reader would expect.
+    /// </para>
+    /// </summary>
+    private static int ClosestWordDistance(string hay, string needle, int max)
+    {
+        var best = max + 1;
+        var start = -1;
+
+        for (var i = 0; i <= hay.Length; i++)
+        {
+            var inWord = i < hay.Length && char.IsLetterOrDigit(hay[i]);
+            if (inWord)
+            {
+                if (start < 0) start = i;
+                continue;
+            }
+
+            if (start < 0) continue;
+
+            var length = i - start;
+            // A single word is never long enough to trouble the stack buffer,
+            // but the length gate still skips most of them outright.
+            if (Math.Abs(length - needle.Length) <= max)
+            {
+                var distance = Distance(hay.Substring(start, length), needle, max);
+                if (distance < best) best = distance;
+                if (best == 0) return 0;
+            }
+
+            start = -1;
+        }
+
+        return best;
     }
 
     /// <summary>

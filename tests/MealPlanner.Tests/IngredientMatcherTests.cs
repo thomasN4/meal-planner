@@ -148,6 +148,89 @@ public class IngredientMatcherTests
     }
 
     [Fact]
+    public void Accents_can_be_left_off_when_typing()
+    {
+        // Half this kitchen is names nobody can type on the keyboard they own.
+        List<InventoryItem> items = [Item("nước chấm"), Item("dry Bánh Đa Cua noodles")];
+
+        Assert.Equal(["nước chấm"], Names(IngredientMatcher.Suggest(items, "nuoc cham")));
+        // đ is a letter with a stroke, not an accent — FormD leaves it alone,
+        // so it is mapped by hand.
+        Assert.Equal(
+            ["dry Bánh Đa Cua noodles"],
+            Names(IngredientMatcher.Suggest(items, "banh da cua")));
+    }
+
+    [Fact]
+    public void An_accent_folded_name_is_only_ever_a_suggestion_never_an_exact_match()
+    {
+        // The safety property behind the whole split. The form autofills from
+        // ExactMatch and then upserts under the name in the box — and to
+        // SQLite's NOCASE index "nuoc cham" is a different row from "nước
+        // chấm", so folding here would quietly create a duplicate under the
+        // unaccented spelling. The suggestion list fills the box with the
+        // stored name first, which is why it is allowed to be loose.
+        List<InventoryItem> items = [Item("nước chấm")];
+
+        Assert.Null(IngredientMatcher.ExactMatch(items, "nuoc cham"));
+        Assert.NotEmpty(IngredientMatcher.Suggest(items, "nuoc cham"));
+        // The accented spelling still matches exactly, ignoring case.
+        Assert.NotNull(IngredientMatcher.ExactMatch(items, "NƯỚC CHẤM"));
+    }
+
+    [Fact]
+    public void A_typo_in_one_word_finds_a_long_name()
+    {
+        // 13 edits from the whole name, one from a word in it. Most rows in a
+        // real kitchen are long and descriptive like this.
+        List<InventoryItem> items = [Item("dry spaghetti noodles")];
+
+        Assert.Equal(["dry spaghetti noodles"], Names(IngredientMatcher.Suggest(items, "spagetti")));
+    }
+
+    [Fact]
+    public void Words_are_split_on_punctuation_as_well_as_spaces()
+    {
+        List<InventoryItem> items = [Item("lao gan ma (peanuts)"), Item("dry-fried salmon")];
+
+        Assert.Equal(["lao gan ma (peanuts)"], Names(IngredientMatcher.Suggest(items, "peanust")));
+        Assert.Equal(["dry-fried salmon"], Names(IngredientMatcher.Suggest(items, "salmen")));
+    }
+
+    [Fact]
+    public void A_word_hit_ranks_below_a_whole_name_hit_even_when_it_is_the_closer_one()
+    {
+        // The rank has to be what decides, so this is built to fail without it:
+        // the whole-name hit is the *worse* spelling (two edits out) and the
+        // word hit is one edit out. Rank first means the name still wins.
+        //
+        // The obvious version of this test — a short name against a long one —
+        // cannot fail, because a name containing a matching word is always
+        // longer than that word, so the length tie-break quietly produces the
+        // right order even with the ranks collapsed.
+        List<InventoryItem> items = [Item("corianzeq"), Item("dry coriandee noodles")];
+
+        Assert.Equal(
+            ["corianzeq", "dry coriandee noodles"],
+            Names(IngredientMatcher.Suggest(items, "coriander")));
+        Assert.Equal(["corianzeq"], Names(IngredientMatcher.Suggest(items, "coriander", limit: 1)));
+    }
+
+    [Fact]
+    public void Short_queries_still_tolerate_no_typos_at_word_level_either()
+    {
+        // The word pass reuses the same budget, so it must not reopen the door
+        // that MaxDistanceFor closed for short queries — otherwise every
+        // three-letter query starts matching a word in half the kitchen.
+        List<InventoryItem> items = [Item("dry roasted peanuts (unsalted)")];
+
+        // "dey" is one edit from the word "dry", and three characters long.
+        Assert.Empty(IngredientMatcher.Suggest(items, "dey"));
+        // Four characters buys one edit, so this one is allowed through.
+        Assert.NotEmpty(IngredientMatcher.Suggest(items, "dery"));
+    }
+
+    [Fact]
     public void Nothing_matches_before_the_page_has_loaded_its_items()
     {
         // The page renders once before OnInitializedAsync completes, with
