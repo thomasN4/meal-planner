@@ -298,3 +298,9 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   applying anything**, so never report an edit as landed without reading the
   body back. `list`, `create`, `checks` and `gh api` are fine. Issue #10.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
+- **Stage explicit paths; never `git add -A`.** It once swept a
+  `mealplanner.db.testbackup-182628` left by manual testing into a commit —
+  `*.db` does not match a name ending in `-182628`. `.gitignore` has been
+  widened (`*.db.*`, plus the usual secret shapes), but the ignore file is the
+  backstop, not the plan: it only catches what somebody thought to list, and the
+  next stray file will have a name nobody predicted. Name what you are committing.
