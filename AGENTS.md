@@ -68,7 +68,14 @@ dotnet run                   # serves http://0.0.0.0:5263 (launchSettings "http"
   is the point of the app. That makes the `/mcp` loopback guard in `Program.cs`
   load-bearing rather than decorative — don't weaken it.
 - `ASPNETCORE_URLS` alone won't change the port — `dotnet run` prefers the
-  launchSettings profile; use `--no-launch-profile` to override.
+  launchSettings profile; use `--no-launch-profile` to override. That flag also
+  drops the profile's `ASPNETCORE_ENVIRONMENT=Development`, and in Production
+  the dev static-asset handler 503s on `MealPlanner.styles.css` and
+  `_framework/blazor.web.js`: the page renders unstyled with a dead circuit,
+  which reads as a broken build rather than a config slip. Set the environment
+  back explicitly — `ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://0.0.0.0:5299 dotnet run --no-launch-profile`.
+  Keep the `0.0.0.0` bind if the browser you're testing from is on another
+  machine; that host's `127.0.0.1` is not this one's.
 - EF CLI: `export PATH="$PATH:$HOME/.dotnet/tools"` first, then
   `dotnet ef migrations add <Name>` etc. Migrations apply on app start;
   `dotnet ef database update` is optional for a standalone check.
