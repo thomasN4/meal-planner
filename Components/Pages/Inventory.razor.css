@@ -1,5 +1,7 @@
 .category-toggle {
     text-align: left;
+    /* .btn pins font-size to 1rem, which would shrink the enclosing h5. */
+    font-size: inherit;
 }
 
 /* Kill the sticky blue focus ring after a mouse click (app.css styles
@@ -16,8 +18,16 @@
     outline: none;
 }
 
-.category-toggle:hover h5,
-.category-toggle:focus-visible h5 {
+/* Colour the label, not the button: btn-link would otherwise paint the header
+   link-blue, and Bootstrap's .text-body fix for that is !important, which no
+   hover rule on the button itself can outrank. A child with its own colour
+   can. */
+.category-label {
+    color: var(--bs-body-color);
+}
+
+.category-toggle:hover .category-label,
+.category-toggle:focus-visible .category-label {
     color: #1b6ec2;
 }
 

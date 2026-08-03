@@ -43,10 +43,16 @@
                         disabled="@string.IsNullOrWhiteSpace(newName)">Add</button>
             </div>
         </div>
-        @if (statusMessage is not null)
-        {
-            <div class="alert alert-success py-2 mt-3 mb-0" role="status">@statusMessage</div>
-        }
+        @* The live region stays in the DOM and only its contents change —
+           screen readers announce mutations inside a region they already know
+           about, not one that arrives with its text already in it. Empty, the
+           wrapper has no height, so the margin lives on the alert. *@
+        <div role="status">
+            @if (statusMessage is not null)
+            {
+                <div class="alert alert-success py-2 mt-3 mb-0">@statusMessage</div>
+            }
+        </div>
     </div>
 </div>
 
@@ -64,19 +70,27 @@ else
     {
         var category = group.Key;
         var isOpen = expandedCategories.Contains(category);
-        <div class="category-group mt-3">
-            <button type="button"
-                    class="category-toggle btn btn-link text-decoration-none text-body p-0 d-flex align-items-center gap-2 w-100"
-                    @onclick="() => ToggleCategory(category)"
-                    aria-expanded="@isOpen"
-                    aria-controls="@($"category-{category}")">
-                <span class="category-chevron @(isOpen ? "open" : null)" aria-hidden="true">▸</span>
-                <h5 class="mb-0">@Pretty(category)</h5>
-                <span class="text-muted small">(@group.Count())</span>
-            </button>
+        @* Key the group too: without it, deleting the last item in a category
+           shifts the ones below onto the DOM of the group above, which lands a
+           focus ring on a header nobody clicked — the row bug one level up. *@
+        <div class="category-group mt-3" @key="category">
+            @* Heading wraps the button, not the reverse: a button takes phrasing
+               content only, and the categories belong in the heading outline.
+               aria-expanded must be a string — Blazor drops a false bool
+               attribute entirely, so the collapsed state went unannounced. *@
+            <h5 class="mb-0">
+                <button type="button"
+                        class="category-toggle btn btn-link text-decoration-none p-0 d-flex align-items-center gap-2 w-100"
+                        @onclick="() => ToggleCategory(category)"
+                        aria-expanded="@(isOpen ? "true" : "false")">
+                    <span class="category-chevron @(isOpen ? "open" : null)" aria-hidden="true">▸</span>
+                    <span class="category-label">@Pretty(category)</span>
+                    <span class="text-muted small">(@group.Count())</span>
+                </button>
+            </h5>
             @if (isOpen)
             {
-                <table id="@($"category-{category}")" class="table table-sm align-middle mt-2">
+                <table class="table table-sm align-middle mt-2">
                     <tbody>
                     @foreach (var item in group.OrderBy(i => i.Name))
                     {
