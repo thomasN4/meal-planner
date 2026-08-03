@@ -96,7 +96,7 @@
         <div class="name-hint" aria-live="polite">
             @if (matchedItem is not null)
             {
-                <span>Updating <strong>@matchedItem.Name</strong> — @Pretty(matchedItem.Category)@(string.IsNullOrEmpty(matchedItem.Quantity) ? null : $" · {matchedItem.Quantity}")</span>
+                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()</span>
             }
         </div>
         @* The live region stays in the DOM and only its contents change —
@@ -480,6 +480,27 @@ else
         Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }
+
+    // The hint describes the write, not the row. Once the user edits a box the
+    // two diverge — and this line is the only warning of what Add is about to
+    // overwrite, so it saying "· infinite" while Update writes "half a jar"
+    // defeats the point of having it. Same "before → after" idiom as
+    // InventoryChange.Describe(), which reports the same edit after the fact.
+    private string HintCategory() =>
+        matchedItem is null || newCategory == matchedItem.Category
+            ? Pretty(newCategory)
+            : $"{Pretty(matchedItem.Category)} → {Pretty(newCategory)}";
+
+    private string HintQuantity() =>
+        matchedItem is null || newQuantity == matchedItem.Quantity
+            ? DisplayQuantity(newQuantity)
+            : $"{DisplayQuantity(matchedItem.Quantity)} → {DisplayQuantity(newQuantity)}";
+
+    // Matches InventoryChange.Describe()'s wording for an empty quantity, so
+    // the hint and the status line below it don't call the same thing two
+    // different things.
+    private static string DisplayQuantity(string quantity) =>
+        string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
 
     private static string Pretty(IngredientCategory c) => c switch
     {

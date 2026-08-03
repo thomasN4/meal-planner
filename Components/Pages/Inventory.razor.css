@@ -84,10 +84,20 @@
 }
 
 /* Not Bootstrap's .list-group-item.active: that would be a specificity fight
-   over a colour we would only be overriding anyway. */
+   over a colour we would only be overriding anyway.
+
+   The inset bar is not decoration. This was #e9ecef on #fff, which is a fine
+   highlight until a browser extension remaps the palette — the household
+   browses with Dark Reader, which turns that pair into rgb(35,38,39) on
+   rgb(24,26,27), an 11/255 difference that is invisible at reading size and
+   left arrow-key navigation unusable. A stronger tint helps, but the bar is
+   what actually survives, because a remapper can rewrite a colour and cannot
+   rewrite the fact that one edge is painted and the others are not. Inset
+   rather than border-left so the text does not shift by 3px on highlight. */
 .name-suggestion:hover,
 .name-suggestion.highlighted {
-    background-color: #e9ecef;
+    background-color: #cfe2ff;
+    box-shadow: inset 0.1875rem 0 0 #0d6efd;
 }
 
 /* Same trick as the status region above it — empty, the wrapper adds no

@@ -258,6 +258,42 @@ public class InventoryPageTests
     }
 
     [Fact]
+    public async Task The_hint_shows_the_change_it_is_about_to_write_not_just_the_stored_row()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("black pepper", "infinite", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("black pepper");
+        Assert.Contains("infinite", cut.Find("div.name-hint").TextContent, StringComparison.Ordinal);
+
+        cut.Find("#new-quantity").Change("half a jar");
+
+        // The hint is the one thing warning the user what Add is about to
+        // overwrite, so it cannot keep describing the stored row once the form
+        // has diverged from it — it used to read "· infinite" while Update
+        // wrote "half a jar".
+        var hint = cut.Find("div.name-hint").TextContent;
+        Assert.Contains("infinite", hint, StringComparison.Ordinal);
+        Assert.Contains("half a jar", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_hint_shows_a_category_the_user_picked_by_hand()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("black pepper", "infinite", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("black pepper");
+        cut.Find("#new-category").Change(nameof(IngredientCategory.Baking));
+
+        var hint = cut.Find("div.name-hint").TextContent;
+        Assert.Contains("Dry Seasonings", hint, StringComparison.Ordinal);
+        Assert.Contains("Baking", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_name_that_stops_matching_takes_the_autofill_back_out()
     {
         await using var page = await PageHarness.CreateAsync();
