@@ -178,6 +178,39 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   write can't leave the hint claiming a row the form is no longer editing.
   Suggestions exclude the exact match on purpose — a row in that list can be
   arrowed onto, which would turn Enter from "add" into "fill".
+- **The items table is a draft editor, not a live one.** Rows used to commit
+  quantity and category on `@onchange` with no affordance saying so, and `✕` sat
+  one misclick from an unconfirmed delete. Now a pencil opens one row at a time
+  into a draft with explicit Save/Cancel, and delete is only reachable inside it.
+  The draft is a **draft** because a rename can *fail* — mixing "quantity commits
+  on blur, name needs Save" in one row is worse than making the whole row a
+  draft. Load-bearing details:
+  - the draft lives in `@code` fields (`editingId`, `editName`, …), **never** in
+    the DOM. `RefreshAsync` replaces `items` on every write from anywhere, and
+    the table is grouped by category, so a row whose category moves is re-rendered
+    under a different `@key`'d group and its DOM is torn down. Focus is lost
+    there; typed text must not be;
+  - the notifier handler drops edit mode when `editingId` matches no row — some
+    other tab deleted it. `DeleteAsync` clears `editingId` *before* it writes, or
+    that guard announces a removal the user just asked for themselves;
+  - `✕` never appears in edit mode. It means "cancel" everywhere else in the
+    world, so the same glyph would sit one mis-click from "delete this row". The
+    trash keeps its own shape and its own gap.
+- **Renaming goes through `UpdateItemAsync`, keyed by Id**, because a name stops
+  being a handle the moment it changes — everything else here keys on Name, which
+  the NOCASE index makes identity. Renaming onto a name another row holds returns
+  `ChangeKind.NameTaken`: **rejected, never merged**, because quantity is free
+  text and there is no honest way to combine "2 bags" with "half a bottle". Two
+  things measured rather than assumed, both written up where they live:
+  - the collision pre-check needs `&& i.Id != id`. NOCASE means `Name == "Salt"`
+    finds the row being edited, so without it every case-only fix ("salt" →
+    "Salt") is refused — the one rename the index exists to permit;
+  - the retry loop catches `DbUpdateConcurrencyException` only, and a constraint
+    violation is answered as `NameTaken` on the spot. Widening it to `IsWriteRace`
+    also ends at `NameTaken` (the retry re-reads and the pre-check sees it), so
+    that is one round trip saved, not a correctness guard —
+    `Parallel_renames_onto_one_name_leave_exactly_one_winner` passes either way.
+    Don't read its green as proof the narrow catch is required.
 - `InventoryService` methods may throw `ArgumentException` for empty names —
   UI guards before calling; API-ish callers (MCP tools) must catch and return
   a message instead.

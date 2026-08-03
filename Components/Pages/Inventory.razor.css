@@ -7,15 +7,29 @@
 /* Kill the sticky blue focus ring after a mouse click (app.css styles
    .btn:focus). Keep a ring for keyboard focus via :focus-visible. */
 .category-toggle:focus,
-.item-remove:focus {
+.item-remove:focus,
+.item-edit:focus {
     box-shadow: none;
     outline: none;
 }
 
 .category-toggle:focus-visible,
-.item-remove:focus-visible {
+.item-remove:focus-visible,
+.item-edit:focus-visible {
     box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
     outline: none;
+}
+
+/* Same reasoning as .name-suggestion.highlighted below: the household browses
+   with Dark Reader, and a background tint is the one signal a palette remapper
+   can flatten. It cannot flatten the fact that one edge is painted and the
+   others are not. The swapped buttons are the primary signal that a row is open
+   for editing; this is the backup that survives the extension.
+
+   On the first cell rather than the row, because box-shadow on a <tr> is not
+   reliably painted across browsers. */
+.row-editing td:first-child {
+    box-shadow: inset 0.1875rem 0 0 #0d6efd;
 }
 
 /* Colour the label, not the button: btn-link would otherwise paint the header

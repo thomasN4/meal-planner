@@ -129,6 +129,67 @@ public class InventoryConcurrencyTests
     }
 
     [Fact]
+    public async Task Parallel_renames_onto_one_name_leave_exactly_one_winner()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var ids = new int[Writers];
+        for (var i = 0; i < Writers; i++)
+        {
+            await harness.Service.UpsertAsync($"Ingredient {i}", $"{i} bags");
+            ids[i] = (await harness.Service.FindAsync($"Ingredient {i}"))!.Id;
+        }
+
+        // Every writer tries to rename its own row to the same target. The
+        // collision pre-check cannot settle this on its own — writers pass it
+        // and then lose at SaveChanges, which is verified: making that catch
+        // throw turns this test red.
+        //
+        // What it does NOT distinguish is how the loss is handled. Widening
+        // UpdateItemAsync's retry to IsWriteRace leaves this green, because the
+        // retry re-reads and the pre-check then returns the same NameTaken.
+        // Don't read a green here as proof that the narrow catch is required —
+        // the invariant it pins is one winner, no exceptions, and nothing merged.
+        var changes = await InventoryHarness.InParallelAsync(Writers, i =>
+            harness.NewService().UpdateItemAsync(ids[i], "Rice", $"{i} bags", IngredientCategory.Grains));
+
+        Assert.Equal(1, changes.Count(c => c.Kind == ChangeKind.Updated));
+        Assert.Equal(Writers - 1, changes.Count(c => c.Kind == ChangeKind.NameTaken));
+        // Nobody was merged away: the losers still hold their own names.
+        Assert.Equal(Writers, await harness.CountAsync());
+    }
+
+    [Fact]
+    public async Task An_update_racing_a_remove_of_the_same_row_never_throws()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Rice", "2 bags", IngredientCategory.Grains);
+        var id = (await harness.Service.FindAsync("Rice"))!.Id;
+
+        // A row can be deleted between UpdateOnceAsync's read and its write —
+        // another tab, or Claude. That is the one race a retry here can settle,
+        // and it settles into a clean NotFound rather than an exception.
+        var changes = await InventoryHarness.InParallelAsync(Writers, async i =>
+        {
+            if (i % 2 == 1)
+            {
+                // DeleteAsync returns nothing; only the updates are the subject.
+                await harness.NewService().DeleteAsync(id);
+                return null;
+            }
+
+            return await harness.NewService()
+                .UpdateItemAsync(id, "Rice", $"{i} bags", IngredientCategory.Grains);
+        });
+
+        Assert.All(
+            changes.Where(c => c is not null),
+            c => Assert.Contains(
+                c!.Kind,
+                new[] { ChangeKind.Updated, ChangeKind.Unchanged, ChangeKind.NotFound }));
+        Assert.InRange(await harness.CountAsync(), 0, 1);
+    }
+
+    [Fact]
     public async Task A_write_failure_that_is_not_a_race_is_not_swallowed()
     {
         await using var harness = await InventoryHarness.CreateAsync();
