@@ -670,7 +670,20 @@ else
             return;
         }
 
-        focusPencilId = id;
+        // Only when the row stayed put. A save that changed the category
+        // relocates the row to another group, often off-screen, and FocusAsync
+        // scrolls its target into view — so restoring focus there would yank the
+        // page after the row. Restoring focus means putting the user back where
+        // they were, and once the row has moved there is no such place; the two
+        // alternatives are both worse, since preventScroll would leave focus on
+        // something invisible. Falling back to <body> costs a keyboard user their
+        // place in the tab order, which is the lesser harm and is why the
+        // scroll-free path wins here.
+        //
+        // A rename that re-sorts the row a long way inside its own group has the
+        // same shape, and is not handled: there is no server-side notion of where
+        // a row landed, and the distance is bounded by one group.
+        focusPencilId = change.PreviousCategory is null ? id : null;
         editingId = null;
         editError = null;
         // No RefreshAsync: the write above published, and the notifier handler

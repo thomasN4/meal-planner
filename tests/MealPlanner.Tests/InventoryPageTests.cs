@@ -707,8 +707,7 @@ public class InventoryPageTests
         var cut = page.RenderInventory();
         Toggle(cut, "Dry Seasonings");
         cut.Find("button.item-edit").Click();
-        var afterOpening = page.JSInterop.Invocations.Count(
-            i => i.Identifier == "Blazor._internal.domWrapper.focus");
+        var afterOpening = FocusCalls(page);
 
         cut.Find("button.item-cancel").Click();
 
@@ -716,10 +715,55 @@ public class InventoryPageTests
         // back, so focus falls to <body> unless it is put somewhere. Counting
         // rather than just asserting presence — the open already made one call,
         // so a bare Contains would pass with the close doing nothing.
-        Assert.Equal(
-            afterOpening + 1,
-            page.JSInterop.Invocations.Count(
-                i => i.Identifier == "Blazor._internal.domWrapper.focus"));
+        Assert.Equal(afterOpening + 1, FocusCalls(page));
+    }
+
+    /// <summary>
+    /// How many times the page has asked the browser to move focus. bUnit has no
+    /// focus model, but it services Blazor's own focus interop even in Strict
+    /// mode, so this is the closest thing to observing the caret.
+    /// </summary>
+    private static int FocusCalls(PageHarness page) =>
+        page.JSInterop.Invocations.Count(i => i.Identifier == "Blazor._internal.domWrapper.focus");
+
+    [Fact]
+    public async Task Saving_a_row_that_stayed_put_puts_focus_back_on_its_pencil()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = FocusCalls(page);
+
+        cut.FindAll("tbody input")[1].Input("2 jars");
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        Assert.Equal(afterOpening + 1, FocusCalls(page));
+    }
+
+    [Fact]
+    public async Task Saving_a_move_to_another_group_does_not_chase_the_row_with_focus()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.Other);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Other");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = FocusCalls(page);
+
+        cut.Find("select.form-select-sm").Change(nameof(IngredientCategory.DrySeasonings));
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Equal("true", Header(cut, "Dry Seasonings").GetAttribute("aria-expanded")));
+
+        // FocusAsync scrolls its target into view, and the row has just moved to
+        // a group that may be nowhere near the viewport — so chasing it would
+        // drag the page along behind a save. Focus falls to <body> instead,
+        // which costs the tab order but never moves the scrollbar.
+        Assert.Equal(afterOpening, FocusCalls(page));
     }
 
     [Fact]

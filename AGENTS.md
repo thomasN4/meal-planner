@@ -212,12 +212,22 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     - Blazor does **not** clear an element-ref capture when the element goes, so
       `RefreshAsync` prunes `pencils` against the live ids. Circuits here are
       long-lived and the alternative is a stale entry per deleted row, forever;
+    - **a save that moved the row to another category deliberately restores no
+      focus.** `FocusAsync` scrolls its target into view, and the row has just
+      relocated to a group that may be nowhere near the viewport, so chasing it
+      drags the page along behind a save. Falling back to `<body>` costs a
+      keyboard user their place in the tab order and never moves the scrollbar,
+      which is the trade this household asked for. `preventScroll: true` is the
+      obvious third option and is worse — focus lands on something invisible.
+      `Saving_a_row_that_stayed_put…` and `Saving_a_move_to_another_group…` pin
+      this from both sides: restoring always fails the second, never restoring
+      fails the first;
     - bUnit has no focus model but does service
-      `Blazor._internal.domWrapper.focus` even in Strict mode, so both focus
-      tests assert that invocation and both go red when their `FocusAsync` is
-      removed. The close test **counts** invocations rather than asserting
-      presence — opening already made one, so a bare `Contains` passes with the
-      close doing nothing;
+      `Blazor._internal.domWrapper.focus` even in Strict mode, so every focus
+      test asserts that invocation and each goes red when its `FocusAsync` is
+      removed. They **count** invocations rather than asserting presence —
+      opening already made one, so a bare `Contains` passes with the close doing
+      nothing;
   - `✕` never appears in edit mode. It means "cancel" everywhere else in the
     world, so the same glyph would sit one mis-click from "delete this row". The
     trash keeps its own shape and its own gap.
