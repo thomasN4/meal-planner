@@ -11,9 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- ClaudeIngredientClassifier.ParseResults is a pure function over the
-         CLI's stdout, and is the piece worth testing without spawning a
-         process. It stays internal rather than widening the app's surface. -->
+    <!-- For the pure functions worth testing without standing anything up:
+         ClaudeIngredientClassifier.ParseResults over the CLI's stdout, and
+         IngredientMatcher over a list of names. Both stay internal rather than
+         widening the app's surface. -->
     <InternalsVisibleTo Include="MealPlanner.Tests" />
   </ItemGroup>
 

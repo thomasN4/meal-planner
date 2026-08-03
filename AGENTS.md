@@ -164,7 +164,20 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   **Deliberate**: on a LAN the latency is invisible, and the alternative
   (debounce, or `onchange`) either complicates the code or leaves the button
   stale. Don't "optimize" it away — it would only matter over the internet,
-  which this app is not for.
+  which this app is not for. That round trip now also drives name matching and
+  autofill (below), so there is more riding on it than the button.
+- **Name matching on the add form.** `IngredientMatcher` is pure and static,
+  and runs against the `items` list the page already holds — it is a view over
+  data that came through `InventoryService`, not a second way in, so don't give
+  it a `DbContext` or turn it into a service. An **exact** (trim, ignore-case)
+  name fills Category and Quantity from the matched row; a near match only
+  offers suggestions and must never fill on its own, or typing "Salsa" past
+  "Sal" silently inherits "Salt"'s quantity. `categoryTouched`/`quantityTouched`
+  are what stop autofill overwriting something the user typed; `SyncToName` is
+  the single place the rule lives, and the notifier calls it too so a live
+  write can't leave the hint claiming a row the form is no longer editing.
+  Suggestions exclude the exact match on purpose — a row in that list can be
+  arrowed onto, which would turn Enter from "add" into "fill".
 - `InventoryService` methods may throw `ArgumentException` for empty names —
   UI guards before calling; API-ish callers (MCP tools) must catch and return
   a message instead.
