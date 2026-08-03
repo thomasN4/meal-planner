@@ -20,6 +20,10 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <!-- bUnit v2: one package, net8.0 and up. v1's bunit.core/bunit.web split
+         is gone, and v1's TestContext was renamed BunitContext because xUnit v3
+         introduced a TestContext of its own — v1 samples will not compile. -->
+    <PackageReference Include="bunit" Version="2.8.6" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Bunit" />
     <Using Include="MealPlanner.Models" />
     <Using Include="MealPlanner.Services" />
     <Using Include="Xunit" />

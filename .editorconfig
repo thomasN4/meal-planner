@@ -1,0 +1,117 @@
+# Conventions this codebase already follows, written down so Rider, VS and the
+# CLI agree — and so `dotnet format` in CI has something to check against.
+#
+# Everything here was derived from a sweep of the existing source, not from a
+# template. Nothing in this file asks for a change to code that is already
+# committed: `dotnet format MealPlanner.sln --verify-no-changes` was green
+# before it landed and must stay green after.
+#
+# CAREFUL WITH SEVERITIES. `dotnet format` defaults to --severity warn, so any
+# rule promoted to `warning` here becomes a CI gate on the spot. Style
+# preferences stay at `suggestion` unless the whole tree provably complies.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Project, workflow and settings files are two-space throughout.
+[*.{csproj,props,targets,slnx,yml,yaml,json}]
+indent_size = 2
+
+# Markdown: trailing double-space is a hard line break, so leave it alone.
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{cs,razor}]
+# System.* first, then alphabetical, no blank line between groups — matches
+# every file in the tree that has a using at all.
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# The tree is file-scoped everywhere except EF's generated migrations, which
+# are exempted below.
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# `var` for locals, without exception (220 sites, no explicitly-typed local).
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = true:suggestion
+
+# Braces even on single-statement bodies. `true` rather than `when_multiline`:
+# the tree braces one-line early returns too.
+csharp_prefer_braces = true:suggestion
+
+# Nothing is qualified with `this.` anywhere.
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+csharp_new_line_before_open_brace = all
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+
+# Primary constructors are declined on purpose: the constructors this would
+# rewrite (InventoryService, InventoryChangeNotifier, IngredientCategorizer,
+# RecipeService, and both claude-CLI services) carry XML docs and comments that
+# have nowhere to live on a primary constructor.
+csharp_style_prefer_primary_constructors = false
+dotnet_diagnostic.IDE0290.severity = none
+
+# --- Naming ------------------------------------------------------------------
+# Order matters: the const/static rule is declared first so PascalCase constants
+# are matched before the instance-field rule can claim them.
+
+[*.cs]
+dotnet_naming_rule.constants_and_statics_are_pascal_case.severity = suggestion
+dotnet_naming_rule.constants_and_statics_are_pascal_case.symbols = private_constants_and_statics
+dotnet_naming_rule.constants_and_statics_are_pascal_case.style = pascal_case
+
+dotnet_naming_symbols.private_constants_and_statics.applicable_kinds = field
+dotnet_naming_symbols.private_constants_and_statics.applicable_accessibilities = private
+# `static` alone, not `const, static`: required_modifiers is an AND, so listing
+# both matched const fields only and let `private static readonly` fall through
+# to the instance rule below, which then demanded a `_` prefix on JsonOptions,
+# ResponseSchema and TemplateDatabase. A const field is implicitly static, so
+# this one modifier covers both shapes.
+dotnet_naming_symbols.private_constants_and_statics.required_modifiers = static
+
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_rule.private_fields_are_underscore_camel_case.severity = suggestion
+dotnet_naming_rule.private_fields_are_underscore_camel_case.symbols = private_instance_fields
+dotnet_naming_rule.private_fields_are_underscore_camel_case.style = underscore_camel_case
+
+dotnet_naming_symbols.private_instance_fields.applicable_kinds = field
+dotnet_naming_symbols.private_instance_fields.applicable_accessibilities = private
+
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+# Razor @code blocks use bare camelCase (`items`, `newName`, `expandedCategories`)
+# — the Blazor template convention, and consistent across both pages. No
+# underscore rule here, deliberately: this is not drift from the .cs files, it
+# is a different convention for a different kind of file.
+[*.razor]
+dotnet_naming_rule.private_fields_are_underscore_camel_case.severity = none
+
+# xUnit facts must be instance methods, so CA1822 is noise in the test project.
+[tests/**.cs]
+dotnet_diagnostic.CA1822.severity = none
+
+# EF Core writes these, block-scoped namespaces and all. Not ours to restyle.
+[Migrations/*.cs]
+generated_code = true
+
+# Vendored Bootstrap: minified single-line files, no trailing newlines. Leave it
+# exactly as it shipped.
+[wwwroot/lib/**]
+generated_code = true
+insert_final_newline = false
+trim_trailing_whitespace = false

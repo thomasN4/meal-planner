@@ -62,6 +62,7 @@ design: it serves a trusted home LAN.
 ```bash
 dotnet build                 # zero warnings expected — keep it that way
 dotnet run                   # serves http://0.0.0.0:5263 (launchSettings "http" profile)
+dotnet format MealPlanner.sln --verify-no-changes   # what CI's lint step runs
 ```
 
 - Binds `0.0.0.0`, not loopback: the household reaches it over the LAN, which
@@ -113,6 +114,32 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
 - The `#:property PublishAot=false` note from the old file-based harness is
   moot here — that constraint was about AOT-publishing a script, and EF model
   building is fine in a normal test project.
+- **Component tests use bUnit v2**, in this same project so they can reuse
+  `InventoryHarness`. `PageHarness` is the bridge: it wraps a `BunitContext`
+  around the harness's real SQLite file, real `InventoryService` and real
+  `InventoryChangeNotifier`, so the only fake below a page is
+  `IRecipeGenerator`. `OutOfCircuitService()` is the second service — an MCP
+  tool, or another tab — and it is what makes "the page refreshes from the
+  notifier and nowhere else" testable at all.
+  - The type is **`BunitContext`, not `TestContext`**: bUnit v2 renamed it
+    because xUnit v3 introduced a `TestContext` of its own. v1 samples found
+    online will not compile, and v1's `bunit.core`/`bunit.web` split is gone.
+  - **Never pass a render mode.** Both pages declare `@rendermode
+    InteractiveServer`, which compiles to a *fixed* render mode, and Blazor's
+    own `ComponentFactory` throws if a caller supplies one as well. bUnit's
+    docs recommend `SetAssignedRenderMode`; that advice is for components
+    without the directive.
+  - Assert through the DOM the page actually renders — `aria-expanded`,
+    `button.category-toggle`, `div[role=status]`. Several of these attributes
+    exist because of specific bugs (Blazor drops a `false` bool attribute), so
+    asserting on them is the regression guard.
+  - Same rule as the concurrency tests: after touching a page, **break the
+    guard and confirm the test goes red.** Deleting `Notifier.Subscribe`,
+    the `generating` flag, the `Enum.IsDefined` check or
+    `mustUse.IntersectWith` each turns a specific test red today. One test is
+    honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
+    cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
+    handler completion regardless; the comment says so, leave it saying so.
 
 ## Conventions & gotchas
 
@@ -143,6 +170,21 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   a message instead.
 - Don't `pkill -f` a pattern that appears in your own command line — it
   matches your own shell. Record and `kill` PIDs instead.
+- **`dotnet format` needs the workspace named**: `dotnet format MealPlanner.sln`,
+  never bare `dotnet format`. The repo root holds both `MealPlanner.sln` and
+  `MealPlanner.csproj`, and format's workspace finder errors on that ambiguity
+  where `dotnet build` quietly prefers the `.sln`. It also does not touch
+  `.razor` files — there is no Razor formatter — so Razor markup stays an IDE
+  concern.
+- **`.editorconfig` severity is a live wire.** `dotnet format` defaults to
+  `--severity warn`, so promoting any rule there to `warning` turns it into a
+  CI gate on the next push. New preferences go in at `suggestion` or `silent`
+  unless the whole tree already complies; re-run the verify command before
+  committing. Two traps already paid for: `required_modifiers` is an AND, so
+  `const, static` matches only `const` and lets `private static readonly` fall
+  through to the underscore rule — use `static` alone; and `Migrations/` plus
+  `wwwroot/lib/` are marked `generated_code = true` because EF's block-scoped
+  namespaces and vendored Bootstrap are not ours to restyle.
 - **Shelling out to `claude -p`** (`ClaudeIngredientClassifier`). The flag set
   is load-bearing, and each of these was measured rather than guessed:
   - `--json-schema` is not optional. Without it, classifying "coriander" came

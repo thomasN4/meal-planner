@@ -19,10 +19,24 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Restore
+        run: dotnet restore
+
+      # Name the workspace explicitly: the repo root holds both MealPlanner.sln
+      # and MealPlanner.csproj, and dotnet format's workspace finder errors on
+      # that ambiguity where `dotnet build` quietly prefers the .sln.
+      #
+      # This checks formatting and code style against .editorconfig, not
+      # correctness. It is green on the tree as committed; it exists to keep
+      # Rider and the CLI from drifting apart. Note it does not touch .razor
+      # files — dotnet format has no Razor formatter.
+      - name: Lint
+        run: dotnet format MealPlanner.sln --verify-no-changes --no-restore
+
       # -warnaserror holds CI to the zero-warning bar AGENTS.md asks for.
       # Release rather than Debug so the tests run against what would ship.
       - name: Build
-        run: dotnet build --configuration Release -warnaserror
+        run: dotnet build --configuration Release -warnaserror --no-restore
 
       - name: Test
         run: dotnet test --configuration Release --no-build --logger 'console;verbosity=normal'
