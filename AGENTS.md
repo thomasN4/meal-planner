@@ -394,6 +394,12 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   `gh api -X PATCH repos/:owner/:repo/pulls/<n>`. **`gh pr edit` fails before
   applying anything**, so never report an edit as landed without reading the
   body back. `list`, `create`, `checks` and `gh api` are fine. Issue #10.
+  That gh also predates **`gh pr checks --json`**, which is a trap in a polling
+  loop rather than an obvious failure: it exits non-zero with a usage message,
+  so `until [ "$(gh pr checks N --json bucket ...)" = "true" ]` never becomes
+  true and spins past a run that finished minutes ago. Poll the plain text
+  output (`gh pr checks <n>` prints `pass`/`fail`/`pending` per row) or go
+  through `gh api repos/:owner/:repo/commits/<sha>/check-runs`.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
 - **Stage explicit paths; never `git add -A`.** It once swept a
   `mealplanner.db.testbackup-182628` left by manual testing into a commit —
