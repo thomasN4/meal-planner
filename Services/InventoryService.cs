@@ -268,7 +268,12 @@ public class InventoryService
 
         var before = existing.Quantity;
         var beforeNotes = existing.Notes;
-        var notesMoved = notes is not null && existing.Notes != notes;
+        // (existing.Notes ?? "") because null and "" both mean "no note" — a row
+        // created without one holds null, and the add form sends "" for an empty
+        // box. Comparing them raw makes every Update on an MCP-created row look
+        // like a note change: it reported "note updated", published to every
+        // circuit, and nothing had changed.
+        var notesMoved = notes is not null && (existing.Notes ?? string.Empty) != notes;
         var changed = before != quantity
             || (category.HasValue && existing.Category != category.Value)
             || notesMoved;
@@ -494,7 +499,12 @@ public class InventoryService
         var beforeQuantity = existing.Quantity;
         var beforeCategory = existing.Category;
         var beforeNotes = existing.Notes;
-        var notesMoved = notes is not null && existing.Notes != notes;
+        // (existing.Notes ?? "") because null and "" both mean "no note" — a row
+        // created without one holds null, and the add form sends "" for an empty
+        // box. Comparing them raw makes every Update on an MCP-created row look
+        // like a note change: it reported "note updated", published to every
+        // circuit, and nothing had changed.
+        var notesMoved = notes is not null && (existing.Notes ?? string.Empty) != notes;
         var changed = beforeName != name
             || beforeQuantity != quantity
             || beforeCategory != category

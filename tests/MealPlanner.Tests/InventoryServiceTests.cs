@@ -505,6 +505,39 @@ public class InventoryServiceTests
     }
 
     [Fact]
+    public async Task An_empty_note_over_a_row_that_never_had_one_is_not_a_change()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        // Notes is null, not "" — how every row Claude creates over MCP starts,
+        // and how every row predating the add form's Notes box starts.
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains);
+        var seen = Watch(harness);
+
+        // What the add form sends when the box is empty.
+        var change = await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains, "");
+
+        // Reported Updated / "note updated" and published to every circuit,
+        // because null and "" compared unequal despite both meaning "no note".
+        Assert.Equal(ChangeKind.Unchanged, change.Kind);
+        Assert.Equal("\"Oats\" unchanged (1 bag)", change.Describe());
+        Assert.Empty(seen);
+    }
+
+    [Fact]
+    public async Task An_empty_note_over_a_row_that_never_had_one_still_reports_a_real_quantity_change()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains);
+
+        // The same null-vs-empty pairing, but with something genuinely changed:
+        // the note must stay quiet without swallowing the quantity.
+        var change = await harness.Service.UpsertAsync("Oats", "2 bags", IngredientCategory.Grains, "");
+
+        Assert.Equal(ChangeKind.Updated, change.Kind);
+        Assert.Equal("\"Oats\": 1 bag → 2 bags", change.Describe());
+    }
+
+    [Fact]
     public async Task A_write_that_does_not_supply_notes_reports_no_note_change()
     {
         await using var harness = await InventoryHarness.CreateAsync();

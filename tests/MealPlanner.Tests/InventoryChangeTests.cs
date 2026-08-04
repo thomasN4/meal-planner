@@ -106,10 +106,10 @@ public class InventoryChangeTests
     }
 
     [Fact]
-    public void An_empty_note_replacing_a_null_one_is_not_a_change()
+    public void A_change_that_left_the_note_alone_describes_the_quantity()
     {
-        // "" and null both render as no note, so a write that swaps one for the
-        // other must not claim the note moved.
+        // Both null is "the note was not supplied, or did not move" — the
+        // quantity is then the only honest headline.
         var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
         {
             PreviousNotes = null,
