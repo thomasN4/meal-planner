@@ -15,14 +15,29 @@ namespace MealPlanner.Services;
 /// write publishes like any other, so open pages re-render themselves and no
 /// page needs to know this service exists.
 /// </para>
+/// <para>
+/// Only <see cref="ChangeKind.Created"/> is queued, so a note added to a row
+/// that already exists does not reclassify it. That is deliberate: by then the
+/// item has a category somebody either accepted or chose, and an edit is not
+/// grounds to second-guess it — the same argument that makes filing something
+/// under Other by hand stick. A note is worth reading precisely once, when the
+/// item first arrives and nothing else is known about it.
+/// </para>
 /// </summary>
 public sealed class IngredientCategorizer : BackgroundService
 {
-    private readonly Channel<string> _queue = Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<ClassificationRequest> _queue =
+        Channel.CreateUnbounded<ClassificationRequest>(
+            new UnboundedChannelOptions { SingleReader = true });
 
-    // Names already classified this run. Re-adding "Salt" after someone deleted
-    // it is common, and costs nothing here.
+    // Ingredients already classified this run. Re-adding "Salt" after someone
+    // deleted it is common, and costs nothing here.
+    //
+    // Keyed on the note as well as the name, because the note is allowed to move
+    // the answer — that is the entire point of sending it. Keyed on the name
+    // alone, "arrow root starch" with a note explaining it thickens sauces would
+    // be served whatever a bare "arrow root starch" was filed as earlier, or
+    // vice versa, and the note would look ignored again.
     private readonly ConcurrentDictionary<string, IngredientCategory> _cache =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -88,8 +103,10 @@ public sealed class IngredientCategorizer : BackgroundService
     {
         if (change is { Kind: ChangeKind.Created, Category: IngredientCategory.Other })
         {
+            // change.Notes is set by the create path only when a note was
+            // actually typed, which is the shape ClassificationRequest wants.
             // Unbounded channel: TryWrite only fails on a completed writer.
-            _queue.Writer.TryWrite(change.Name);
+            _queue.Writer.TryWrite(new ClassificationRequest(change.Name, change.Notes));
         }
 
         return Task.CompletedTask;
@@ -132,21 +149,23 @@ public sealed class IngredientCategorizer : BackgroundService
     /// One MCP "stock the kitchen" call creates a dozen items in quick
     /// succession, and a dozen names cost the same as one to classify.
     /// </summary>
-    private async Task<List<string>> CollectBatchAsync(CancellationToken ct)
+    private async Task<List<ClassificationRequest>> CollectBatchAsync(CancellationToken ct)
     {
-        var batch = new List<string>();
+        var batch = new List<ClassificationRequest>();
         // The same name can be created twice (deleted in between) before the
         // batch goes out; the NOCASE index means casing does not make it a
-        // different ingredient.
+        // different ingredient. Still keyed on the name alone, unlike the cache:
+        // there is one row per name, so two arrivals are one ingredient however
+        // their notes differ, and the first note wins.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         void DrainReady()
         {
-            while (batch.Count < _options.MaxBatchSize && _queue.Reader.TryRead(out var name))
+            while (batch.Count < _options.MaxBatchSize && _queue.Reader.TryRead(out var request))
             {
-                if (seen.Add(name))
+                if (seen.Add(request.Name))
                 {
-                    batch.Add(name);
+                    batch.Add(request);
                 }
             }
         }
@@ -171,20 +190,20 @@ public sealed class IngredientCategorizer : BackgroundService
         return batch;
     }
 
-    private async Task CategorizeAsync(List<string> batch, CancellationToken ct)
+    private async Task CategorizeAsync(List<ClassificationRequest> batch, CancellationToken ct)
     {
         var service = _newService();
-        var pending = new List<string>();
+        var pending = new List<ClassificationRequest>();
 
-        foreach (var name in batch)
+        foreach (var request in batch)
         {
-            if (_cache.TryGetValue(name, out var cached))
+            if (_cache.TryGetValue(CacheKey(request), out var cached))
             {
-                await ApplyAsync(service, name, cached, ct);
+                await ApplyAsync(service, request.Name, cached, ct);
             }
             else
             {
-                pending.Add(name);
+                pending.Add(request);
             }
         }
 
@@ -205,7 +224,9 @@ public sealed class IngredientCategorizer : BackgroundService
             }
 
             Remember(pending[i], category);
-            await ApplyAsync(service, pending[i], category, ct);
+            // The note has done its job by now: the write-back is keyed on the
+            // name, because that is what identifies the row.
+            await ApplyAsync(service, pending[i].Name, category, ct);
         }
     }
 
@@ -242,7 +263,18 @@ public sealed class IngredientCategorizer : BackgroundService
         }
     }
 
-    private void Remember(string name, IngredientCategory category)
+    /// <summary>
+    /// One key per name+note pair. The separator is a character a name cannot
+    /// contain — names are trimmed, so no name ends in one and no key straddles
+    /// the boundary the way <c>"a b" + null</c> and <c>"a" + "b"</c> otherwise
+    /// would.
+    /// </summary>
+    private static string CacheKey(ClassificationRequest request) =>
+        string.IsNullOrEmpty(request.Notes)
+            ? request.Name
+            : $"{request.Name}\n{request.Notes}";
+
+    private void Remember(ClassificationRequest request, IngredientCategory category)
     {
         if (_cache.Count >= _options.CacheSize)
         {
@@ -253,6 +285,6 @@ public sealed class IngredientCategorizer : BackgroundService
             _cache.Clear();
         }
 
-        _cache[name] = category;
+        _cache[CacheKey(request)] = category;
     }
 }

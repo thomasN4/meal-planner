@@ -36,7 +36,7 @@ public class CategorizerTests
         await harness.Service.UpsertAsync("Rice");
         await WaitForCategoryAsync(harness, "Rice", IngredientCategory.Snacks);
 
-        Assert.Equal([["Rice"]], classifier.Calls);
+        Assert.Equal([["Rice"]], classifier.CallNames);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class CategorizerTests
         await harness.Service.UpsertAsync("salt");
         await WaitForCategoryAsync(harness, "salt", IngredientCategory.DrySeasonings);
 
-        Assert.Equal([["Salt"]], classifier.Calls);
+        Assert.Equal([["Salt"]], classifier.CallNames);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class CategorizerTests
 
         var stored = await harness.Service.FindAsync("Rice");
         Assert.Equal(IngredientCategory.Other, stored!.Category);
-        Assert.Equal([["Rice"], ["Oats"]], classifier.Calls);
+        Assert.Equal([["Rice"], ["Oats"]], classifier.CallNames);
     }
 
     [Fact]
@@ -123,7 +123,115 @@ public class CategorizerTests
         await harness.Service.UpsertAsync("Oats");
         await WaitForCategoryAsync(harness, "Oats", IngredientCategory.Grains);
 
-        Assert.Equal([["Rice"], ["Oats"]], classifier.Calls);
+        Assert.Equal([["Rice"], ["Oats"]], classifier.CallNames);
+    }
+
+    [Fact]
+    public async Task A_note_typed_at_creation_reaches_the_classifier()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var classifier = new FakeClassifier(_ => IngredientCategory.Baking);
+        await using var running = await StartAsync(harness, classifier);
+
+        await harness.Service.UpsertAsync(
+            "Arrow root starch", "1 bag", notes: "for thickening sauces");
+        await WaitForCategoryAsync(harness, "Arrow root starch", IngredientCategory.Baking);
+
+        var request = Assert.Single(Assert.Single(classifier.Calls));
+        Assert.Equal("Arrow root starch", request.Name);
+        // The note was in the same write as the name, and the change record is
+        // the only thing that could carry it here (issue #21).
+        Assert.Equal("for thickening sauces", request.Notes);
+    }
+
+    [Fact]
+    public async Task A_note_can_change_where_something_is_filed()
+    {
+        // The issue's own example, end to end: the name alone says "root", the
+        // note says "starch", and only one of those is on the shelf.
+        await using var harness = await InventoryHarness.CreateAsync();
+        var classifier = new FakeClassifier(r => r.Notes?.Contains("thickening") == true
+            ? IngredientCategory.Baking
+            : IngredientCategory.Produce);
+        await using var running = await StartAsync(harness, classifier);
+
+        await harness.Service.UpsertAsync("Arrow root", notes: "for thickening sauces");
+
+        await WaitForCategoryAsync(harness, "Arrow root", IngredientCategory.Baking);
+    }
+
+    [Fact]
+    public async Task An_item_created_without_a_note_sends_no_note()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var classifier = new FakeClassifier(_ => IngredientCategory.Grains);
+        await using var running = await StartAsync(harness, classifier);
+
+        // The add form sends "" for an empty box; MCP sends null. Neither is a
+        // note, and the classifier must not be handed an empty string to read
+        // meaning into.
+        await harness.Service.UpsertAsync("Rice", "1 bag", notes: "");
+        await WaitForCategoryAsync(harness, "Rice", IngredientCategory.Grains);
+
+        var request = Assert.Single(Assert.Single(classifier.Calls));
+        Assert.Null(request.Notes);
+    }
+
+    [Fact]
+    public async Task The_same_name_with_a_different_note_is_classified_again()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var classifier = new FakeClassifier(r => r.Notes is null
+            ? IngredientCategory.Produce
+            : IngredientCategory.Baking);
+        await using var running = await StartAsync(harness, classifier);
+
+        await harness.Service.UpsertAsync("Arrow root");
+        await WaitForCategoryAsync(harness, "Arrow root", IngredientCategory.Produce);
+
+        // Same name, and the cache is keyed on it — but the note is new
+        // information, and serving the cached answer would ignore it exactly the
+        // way this whole change exists to stop.
+        await harness.Service.RemoveAsync("Arrow root");
+        await harness.Service.UpsertAsync("Arrow root", notes: "for thickening sauces");
+
+        await WaitForCategoryAsync(harness, "Arrow root", IngredientCategory.Baking);
+        Assert.Equal(2, classifier.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Adding_a_note_later_does_not_reclassify()
+    {
+        // Deliberate, and the sharpest version of the decision: this item is
+        // still in Other, so a later note is the one case where reclassifying
+        // could plausibly help. It still doesn't happen — a note is read once,
+        // when the item arrives. Nothing distinguishes "nobody has looked at
+        // this yet" from "somebody filed it here", so honouring the second write
+        // would also drag a hand-filed row back out of Other.
+        //
+        // Written against an item left in Other on purpose: a test using an item
+        // the classifier *did* place passes whether or not updates are queued,
+        // because the "created, and in Other" filter excludes it on the category
+        // alone. It asserts nothing.
+        await using var harness = await InventoryHarness.CreateAsync();
+        var classifier = new FakeClassifier(r => r.Notes is null
+            ? null
+            : IngredientCategory.Baking);
+        await using var running = await StartAsync(harness, classifier);
+
+        await harness.Service.UpsertAsync("Mystery jar");
+        await WaitForAsync(() => classifier.Calls.Count == 1, "the first classification");
+
+        await harness.Service.UpsertAsync("Mystery jar", notes: "for thickening sauces");
+
+        // Ordering signal: batches run one at a time, so once this lands any
+        // queued work for the jar would already have been applied.
+        await harness.Service.UpsertAsync("Flour", notes: "plain");
+        await WaitForCategoryAsync(harness, "Flour", IngredientCategory.Baking);
+
+        var stored = await harness.Service.FindAsync("Mystery jar");
+        Assert.Equal(IngredientCategory.Other, stored!.Category);
+        Assert.Equal([["Mystery jar"], ["Flour"]], classifier.CallNames);
     }
 
     [Fact]
@@ -159,7 +267,8 @@ public class CategorizerTests
     public async Task A_name_the_classifier_cannot_place_is_left_where_it_is()
     {
         await using var harness = await InventoryHarness.CreateAsync();
-        var classifier = new FakeClassifier(name => name == "Mystery jar" ? null : IngredientCategory.Dairy);
+        var classifier = new FakeClassifier(
+            r => r.Name == "Mystery jar" ? null : IngredientCategory.Dairy);
         await using var running = await StartAsync(harness, classifier);
 
         await harness.Service.UpsertAsync("Mystery jar");
@@ -289,17 +398,22 @@ public class CategorizerTests
         }
     }
 
-    private sealed class FakeClassifier(Func<string, IngredientCategory?> classify) : IIngredientClassifier
+    private sealed class FakeClassifier(Func<ClassificationRequest, IngredientCategory?> classify)
+        : IIngredientClassifier
     {
         private readonly Lock _gate = new();
-        private readonly List<string[]> _calls = [];
+        private readonly List<ClassificationRequest[]> _calls = [];
+
+        // Deliberately the only constructor. A convenience overload taking
+        // Func<string, …> alongside this one makes every `_ => Category.X` here
+        // ambiguous — both delegate types accept it.
 
         /// <summary>Held open to simulate a slow model.</summary>
         public TaskCompletionSource? Gate { get; set; }
 
         public bool Throw { get; set; }
 
-        public IReadOnlyList<string[]> Calls
+        public IReadOnlyList<ClassificationRequest[]> Calls
         {
             get
             {
@@ -310,12 +424,19 @@ public class CategorizerTests
             }
         }
 
+        /// <summary>
+        /// What most tests here assert on: one batch is a list of names, and the
+        /// note is a separate concern with its own tests.
+        /// </summary>
+        public IReadOnlyList<string[]> CallNames =>
+            Calls.Select(call => call.Select(r => r.Name).ToArray()).ToArray();
+
         public async Task<IReadOnlyList<IngredientCategory?>> ClassifyAsync(
-            IReadOnlyList<string> names, CancellationToken ct = default)
+            IReadOnlyList<ClassificationRequest> requests, CancellationToken ct = default)
         {
             lock (_gate)
             {
-                _calls.Add(names.ToArray());
+                _calls.Add(requests.ToArray());
             }
 
             if (Gate is { } gate)
@@ -328,7 +449,7 @@ public class CategorizerTests
                 throw new InvalidOperationException("classifier exploded");
             }
 
-            return names.Select(classify).ToArray();
+            return requests.Select(classify).ToArray();
         }
     }
 }
