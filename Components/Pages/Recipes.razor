@@ -45,8 +45,13 @@ else
                         <option value="60">Under an hour</option>
                     </select>
                 </div>
+                @* Its own class, not just btn-primary. The role buttons below
+                   render before this one, so a Find on a Bootstrap variant
+                   would quietly return whichever of them matched first — the
+                   same lesson as edit-name/edit-quantity on the Inventory
+                   page. *@
                 <div class="col-md-3">
-                    <button class="btn btn-primary w-100" @onclick="GenerateAsync"
+                    <button class="btn btn-primary w-100 generate" @onclick="GenerateAsync"
                             disabled="@(generating || items is not { Count: > 0 })">
                         Generate
                     </button>
@@ -65,23 +70,87 @@ else
             }
             else
             {
-                <div class="mt-3">
-                    <label class="form-label mb-1">Use these up <span class="text-muted">(optional)</span></label>
-                    @foreach (var group in items.GroupBy(i => i.Category).OrderBy(g => g.Key))
-                    {
-                        <div class="mb-1">
-                            <span class="text-muted small me-2">@Pretty(group.Key):</span>
-                            @foreach (var item in group.OrderBy(i => i.Name))
+                @* One search box rather than the whole kitchen as checkboxes:
+                   the grid did not survive a real inventory, and it could only
+                   ever say "use this" — never "not this". *@
+                <div class="mt-3 row g-2 align-items-end">
+                    <div class="col-md-5">
+                        <label class="form-label mb-1" for="pick-ingredient">
+                            Ingredient <span class="text-muted">(optional)</span>
+                        </label>
+                        <IngredientCombobox Id="pick-ingredient" Placeholder="Search the kitchen"
+                                            MaxLength="100"
+                                            @bind-Value="pickText"
+                                            @bind-Value:after="RecomputePickSuggestions"
+                                            Suggestions="pickSuggestions"
+                                            OnPick="Pick">
+                            <OptionTemplate Context="item">
+                                <span>@item.Name</span>
+                                <span class="text-muted small">@PickHint(item)</span>
+                            </OptionTemplate>
+                        </IngredientCombobox>
+                    </div>
+                    @* The choice sticks across picks on purpose: filing three
+                       exclusions in a row is three picks, not six clicks. *@
+                    <div class="col-md-7">
+                        <span class="form-label mb-1 d-block" id="add-as-label">Add as</span>
+                        <div class="btn-group btn-group-sm" role="group" aria-labelledby="add-as-label">
+                            @foreach (var role in Enum.GetValues<IngredientRole>())
                             {
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="checkbox" id="use-@item.Id"
-                                           checked="@mustUse.Contains(item.Name)"
-                                           @onchange="e => ToggleMustUse(item.Name, e.Value is true)"/>
-                                    <label class="form-check-label" for="use-@item.Id">@item.Name</label>
-                                </div>
+                                var chosen = addAs == role;
+                                @* aria-pressed is a string for the same reason
+                                   as aria-expanded on the inventory accordion:
+                                   Blazor drops a false bool attribute. *@
+                                <button type="button" class="btn btn-outline-secondary role-choice @(chosen ? "active" : null)"
+                                        aria-pressed="@(chosen ? "true" : "false")"
+                                        @onclick="() => SetRole(role)">@RoleLabel(role)</button>
                             }
                         </div>
-                    }
+                    </div>
+                </div>
+
+                @if (roles.Count > 0)
+                {
+                    <div class="mt-3 picks">
+                        @foreach (var role in Enum.GetValues<IngredientRole>())
+                        {
+                            var names = NamesFor(role);
+                            if (names.Count == 0)
+                            {
+                                continue;
+                            }
+
+                            <div class="role-row d-flex flex-wrap align-items-baseline gap-2 mb-1"
+                                 data-role="@role" @key="role">
+                                <span class="role-row-label">@RoleLabel(role)</span>
+                                @foreach (var name in names)
+                                {
+                                    <span class="pick-chip @RoleClass(role)" @key="name">
+                                        <span class="pick-name">@name</span>
+                                        @* The role is in the label, not only in
+                                           the chip's shape: a screen reader gets
+                                           no inset bar and no dashed edge. *@
+                                        <button type="button" class="pick-remove"
+                                                aria-label="Remove @name from @RoleLabel(role)"
+                                                @onclick="() => RemovePick(name)">✕</button>
+                                    </span>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                @* @bind, not oninput: nothing on the page reads this live, so
+                   the per-keystroke round trip the other boxes take on purpose
+                   would buy nothing here. maxlength is for the person typing —
+                   the clamp that counts is in ClaudeRecipeGenerator. *@
+                <div class="mt-3">
+                    <label class="form-label mb-1" for="brief">
+                        Anything else? <span class="text-muted">(optional)</span>
+                    </label>
+                    <textarea class="form-control" id="brief" rows="2" maxlength="500"
+                              placeholder="e.g. something warming, nothing spicy"
+                              @bind="brief"></textarea>
                 </div>
             }
         </div>
@@ -182,9 +251,34 @@ else
                         <span class="badge text-bg-secondary ms-1">@recipe.Minutes min</span>
                         <span class="text-muted small ms-2">saved @recipe.CreatedAt.ToLocalTime().ToString("d MMM yyyy")</span>
                     </div>
-                    <button class="btn btn-outline-danger btn-sm"
-                            @onclick="() => DeleteSavedAsync(recipe.Id)"
-                            aria-label="Delete @recipe.Title">✕</button>
+                    @* One click used to be the whole of a delete here — the
+                       same bug the inventory table's draft editor exists to
+                       close, and under the same glyph. ✕ means "cancel"
+                       everywhere else in the world, so the trash keeps its own
+                       shape and the confirmation takes its place rather than
+                       sitting beside it. One row armed at a time, held in a
+                       field rather than in the DOM. *@
+                    @if (confirmingDeleteId == recipe.Id)
+                    {
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="small">Delete this recipe?</span>
+                            @* btn-danger, never btn-primary: this list renders
+                               outside the Enabled guard, and a test asserts
+                               there is no btn-primary when generation is off. *@
+                            <button class="btn btn-danger btn-sm recipe-delete-confirm"
+                                    @ref="confirmButton"
+                                    @onclick="() => ConfirmDeleteAsync(recipe.Id)">Delete</button>
+                            <button class="btn btn-outline-secondary btn-sm recipe-delete-cancel"
+                                    @onclick="() => CancelDelete(recipe.Id)">Cancel</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <button class="btn btn-outline-danger btn-sm recipe-delete"
+                                @ref="trashes[recipe.Id]"
+                                @onclick="() => ArmDelete(recipe.Id)"
+                                aria-label="Delete @recipe.Title">🗑</button>
+                    }
                 </div>
                 @if (recipe.Description.Length > 0)
                 {
@@ -213,7 +307,15 @@ else
 @code {
     private List<InventoryItem>? items;
     private List<SavedRecipe>? saved;
-    private readonly HashSet<string> mustUse = new(StringComparer.OrdinalIgnoreCase);
+    // Name → role, so one item can never hold two roles: picking something
+    // already picked moves it rather than doubling it. Keyed the way the
+    // database is (NOCASE), so "salt" and "Salt" are the one pick they are the
+    // one row of.
+    private Dictionary<string, IngredientRole> roles = new(StringComparer.OrdinalIgnoreCase);
+    private string pickText = string.Empty;
+    private IReadOnlyList<InventoryItem> pickSuggestions = [];
+    private IngredientRole addAs = IngredientRole.UseUp;
+    private string brief = string.Empty;
     private MealType mealType = MealType.Dinner;
     private int timeBudget; // minutes; 0 = no limit
     private IReadOnlyList<RecipeSuggestion>? suggestions;
@@ -221,6 +323,17 @@ else
     private bool generating;
     private string? errorMessage;
     private CancellationTokenSource? generationCts;
+    // One row armed at a time, and in a field rather than in the DOM — the
+    // saved list is replaced wholesale on every refresh, same as editingId on
+    // the inventory page.
+    private int? confirmingDeleteId;
+    // Both ends of the swap take the element that had focus away with them, so
+    // it would fall to <body> — and a keyboard user would land back at the top
+    // of the page holding a half-finished delete.
+    private ElementReference confirmButton;
+    private readonly Dictionary<int, ElementReference> trashes = [];
+    private bool focusConfirm;
+    private int? focusTrashId;
 
     protected override void OnInitialized()
     {
@@ -249,23 +362,120 @@ else
     private async Task RefreshInventoryAsync()
     {
         items = await InventorySvc.GetAllAsync();
-        // Drop selections for items that left the kitchen since the last look.
-        mustUse.IntersectWith(items.Select(i => i.Name));
+        // Drop picks for items that left the kitchen since the last look,
+        // whichever role they held — otherwise the prompt asks Claude to cook
+        // with something that is gone. Rebuilt rather than filtered because
+        // that also re-keys onto the stored spelling, so a case-only rename in
+        // another tab cannot leave the chip and the prompt holding the old one.
+        var kept = new Dictionary<string, IngredientRole>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items)
+        {
+            if (roles.TryGetValue(item.Name, out var role))
+            {
+                kept[item.Name] = role;
+            }
+        }
+
+        roles = kept;
+        // An item that has just left must stop being offered as well as stop
+        // being picked.
+        RecomputePickSuggestions();
     }
 
-    private async Task RefreshSavedAsync() => saved = await RecipeSvc.GetAllAsync();
-
-    private void ToggleMustUse(string name, bool selected)
+    private async Task RefreshSavedAsync()
     {
-        if (selected)
+        saved = await RecipeSvc.GetAllAsync();
+
+        var live = saved.Select(r => r.Id).ToHashSet();
+        // The armed row is gone — deleted here, or by another tab on this page.
+        // Leaving the id set would arm whichever row inherits it next.
+        if (confirmingDeleteId is { } armed && !live.Contains(armed))
         {
-            mustUse.Add(name);
+            confirmingDeleteId = null;
         }
-        else
+
+        // Blazor does not clear an element-ref capture when its element goes,
+        // so without this the dictionary keeps a stale entry per deleted recipe
+        // for the life of the circuit.
+        foreach (var id in trashes.Keys.Where(id => !live.Contains(id)).ToList())
         {
-            mustUse.Remove(name);
+            trashes.Remove(id);
         }
     }
+
+    private void RecomputePickSuggestions()
+    {
+        // Filtered before matching rather than after, so the five-row limit
+        // still means five rows worth offering. Only picks under the *selected*
+        // role drop out — an item held under a different one stays reachable,
+        // because picking it again is how you move it.
+        var available = items?
+            .Where(i => !(roles.TryGetValue(i.Name, out var role) && role == addAs))
+            .ToList();
+
+        // Suggest deliberately drops an exact match, for a reason that belongs
+        // to the Inventory page: a row that can be arrowed onto would turn
+        // Enter from "add" into "fill the form". This box has no Enter-adds
+        // rule, and an exactly-typed name is the likeliest pick there is, so it
+        // goes on the front and pays for one of the five slots. Composing the
+        // two existing helpers keeps "which page is asking" out of a pure
+        // function.
+        var exact = IngredientMatcher.ExactMatch(available, pickText);
+        var near = IngredientMatcher.Suggest(
+            available, pickText, IngredientMatcher.MaxSuggestions - (exact is null ? 0 : 1));
+        pickSuggestions = exact is null ? near : [exact, .. near];
+    }
+
+    private void SetRole(IngredientRole role)
+    {
+        addAs = role;
+        // The filter above reads addAs, so the list has to be recomputed even
+        // though nothing was typed.
+        RecomputePickSuggestions();
+    }
+
+    private void Pick(InventoryItem item)
+    {
+        // Indexer, not TryAdd: picking an item that already holds another role
+        // moves it, which is the only way to change a pick's mind.
+        roles[item.Name] = addAs;
+        // The box clears, ready for the next pick. addAs deliberately does not.
+        pickText = string.Empty;
+        RecomputePickSuggestions();
+    }
+
+    private void RemovePick(string name)
+    {
+        roles.Remove(name);
+        RecomputePickSuggestions();
+    }
+
+    private List<string> NamesFor(IngredientRole role) =>
+        roles.Where(pair => pair.Value == role)
+            .Select(pair => pair.Key)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    // What the suggestion row says on the right. The current role when there is
+    // one, because picking that row is about to change it, and the quantity
+    // otherwise — which is the number you want when deciding what to use up.
+    private string PickHint(InventoryItem item) =>
+        roles.TryGetValue(item.Name, out var role)
+            ? $"currently {RoleLabel(role)}"
+            : item.Quantity;
+
+    private static string RoleLabel(IngredientRole role) => role switch
+    {
+        IngredientRole.UseUp => "Use up",
+        _ => role.ToString(),
+    };
+
+    private static string RoleClass(IngredientRole role) => role switch
+    {
+        IngredientRole.UseUp => "use-up",
+        IngredientRole.Exclude => "exclude",
+        _ => "include",
+    };
 
     private async Task GenerateAsync()
     {
@@ -285,7 +495,10 @@ else
             var request = new RecipeRequest(
                 mealType,
                 timeBudget == 0 ? null : timeBudget,
-                mustUse.ToList());
+                NamesFor(IngredientRole.UseUp),
+                NamesFor(IngredientRole.Include),
+                NamesFor(IngredientRole.Exclude),
+                brief.Trim());
             var result = await Generator.GenerateAsync(request, items, generationCts.Token);
 
             if (result.Count == 0)
@@ -326,10 +539,47 @@ else
         await RefreshSavedAsync();
     }
 
-    private async Task DeleteSavedAsync(int id)
+    private void ArmDelete(int id)
     {
+        confirmingDeleteId = id;
+        focusConfirm = true;
+    }
+
+    private void CancelDelete(int id)
+    {
+        confirmingDeleteId = null;
+        focusTrashId = id;
+    }
+
+    private async Task ConfirmDeleteAsync(int id)
+    {
+        // Cleared before the write, so RefreshSavedAsync's guard below never
+        // has to un-arm a row the user just asked to be rid of.
+        confirmingDeleteId = null;
         await RecipeSvc.DeleteAsync(id);
+        // No notifier for recipes, deliberately — this handler owns the refresh.
         await RefreshSavedAsync();
+        // Nothing to restore focus to: the row and its trash have both gone.
+        // Falling back to <body> is the honest answer, the same one the
+        // inventory editor gives for a save that moved a row to another group.
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (focusConfirm)
+        {
+            focusConfirm = false;
+            await confirmButton.FocusAsync();
+        }
+
+        if (focusTrashId is { } id)
+        {
+            focusTrashId = null;
+            if (trashes.TryGetValue(id, out var trash))
+            {
+                await trash.FocusAsync();
+            }
+        }
     }
 
     public void Dispose()

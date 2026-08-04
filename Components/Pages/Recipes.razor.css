@@ -1,0 +1,66 @@
+/* Bootstrap's .active on an outline button is a fill swap — the current choice
+   signalled by colour and nothing else, which is exactly what ThemeToggle
+   overrides and for the same reason. Copied rather than shared: the two live in
+   different CSS-isolation scopes and there is no stylesheet they both see. */
+.role-choice.active {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+    font-weight: 600;
+}
+
+/* The bar belongs to whichever button is current, so the group must not clip it
+   away at the seams. */
+.role-choice {
+    border-left-width: 1px;
+}
+
+.role-row-label {
+    min-width: 5rem;
+    font-size: 0.875rem;
+    /* The token .text-muted resolves to, not --bs-secondary, which is a fixed
+       grey sitting near 3:1 on a dark ground. */
+    color: var(--bs-secondary-color);
+}
+
+.pick-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 1rem;
+    background-color: var(--bs-secondary-bg);
+    font-size: 0.875rem;
+}
+
+/* Three roles, three shapes. The row label names the role once, at the front,
+   which reads as a heading rather than as a property of each chip — so each
+   chip carries the distinction itself, and carries it in something other than
+   colour. Use up gets the inset bar this repo uses everywhere for "this one";
+   Exclude gets a dashed edge and a struck-through name, which is the one that
+   has to survive greyscale, a red/green deficit and a palette remapper. */
+.pick-chip.use-up {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+}
+
+.pick-chip.exclude {
+    border-style: dashed;
+}
+
+.pick-chip.exclude .pick-name {
+    text-decoration: line-through;
+}
+
+/* A bare glyph rather than a btn: inside a chip, Bootstrap's button padding
+   makes the chip twice the height of its text. */
+.pick-remove {
+    padding: 0;
+    border: 0;
+    background: none;
+    line-height: 1;
+    color: var(--bs-secondary-color);
+}
+
+.pick-remove:hover,
+.pick-remove:focus-visible {
+    color: var(--bs-body-color);
+}

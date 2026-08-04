@@ -34,3 +34,22 @@ public enum MealType
     Snack,
     Dessert,
 }
+
+/// <summary>
+/// What the household wants done with one inventory item when recipes are
+/// generated. An item holds at most one of these.
+/// <para>
+/// <see cref="UseUp"/> and <see cref="Include"/> both mean "in <em>every</em>
+/// recipe", which only makes sense once you know the generator returns 2–3
+/// recipes as <em>alternative choices for one meal</em> — the household cooks
+/// exactly one of them. A constraint that held in only one of the three would
+/// be a coin flip. UseUp goes further and asks the recipe to finish the stocked
+/// amount, which is why the two are not one role.
+/// </para>
+/// </summary>
+public enum IngredientRole
+{
+    UseUp,
+    Include,
+    Exclude,
+}

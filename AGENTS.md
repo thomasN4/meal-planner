@@ -79,6 +79,61 @@ design: it serves a trusted home LAN.
   `RecipeGeneration` config section's effort `medium` and 180s timeout are
   deliberate divergences from `Categorization`. See
   `docs/plans/2026-07-30-recipe-generation.md`.
+  - **Three roles, and they all mean "every recipe"** (`IngredientRole`). The
+    generator returns 2–3 recipes as **alternative choices for one meal** — the
+    household cooks exactly one — so a constraint honoured in only one of them
+    is a coin flip. Use up = in every recipe *and* finish the stocked amount;
+    Include = in every recipe, any quantity; Exclude = in none. Picks are
+    **inventory-only** and live in one name→role dictionary, so an item can
+    never hold two roles and the old `mustUse.IntersectWith` prune still has
+    one place to happen. Don't loosen "every" to "at least one" without
+    re-reading why. See `docs/plans/2026-08-04-recipe-roles.md`.
+  - **An exclusion is verified the same way "have" is, and no further.**
+    `ParseRecipes` drops a recipe **whole** when an ingredient's claim names an
+    excluded row — stripping the ingredient would leave the steps calling for
+    it. It cannot catch a paraphrase ("petits pois" for "Peas") or a mention in
+    a step's prose: a substring scan false-positives on "peanut"/"peach", and
+    nothing separates a synonym from an unrelated ingredient without another
+    model call. `A_paraphrase_of_an_excluded_row_is_not_caught` asserts the
+    paraphrase *survives* and says it cannot be broken to prove it bites —
+    leave it saying so.
+  - **The brief is deliberate free text**, next to a `MealType` enum that exists
+    to avoid exactly that. Three things make it safe rather than one:
+    `--json-schema` pins the answer's shape, AGENTS.md's measured 500-char
+    adversarial results bound the blast radius *at that length*, and the
+    prompt's data-not-instructions paragraph names it. It clamps in
+    `ClaudeRecipeGenerator`, never at the textarea — `maxlength` is a
+    convenience for the typist, the way `[MaxLength]` is for EF while SQLite
+    ignores it.
+  - **Deleting a saved recipe asks first**, one row armed at a time in an `int?`
+    field, never in the DOM. The glyph is `🗑`, never `✕` — same rule as the
+    inventory row editor. No `window.confirm`: `PageHarness` runs bUnit in
+    Strict JSInterop mode and an unmatched call throws.
+  - **Two selector traps.** The role buttons and the delete-confirm button must
+    not be `btn-primary`: the role group renders *before* Generate (so a `Find`
+    on the variant returns the wrong button), and the saved list renders outside
+    the `Enabled` guard that a test asserts holds no `btn-primary` at all.
+    Generate carries its own `generate` class for this reason.
+- **The ingredient combobox is shared** —
+  `Components/Shared/IngredientCombobox.razor` (+ its own `.razor.css`) owns the
+  *widget*: input, listbox, highlight with its wrap to −1, every aria attribute,
+  `@onmousedown:preventDefault` on both the `<ul>` and each `<li>`, blur
+  dismissal. Each page owns what a match *means* and passes `Suggestions` in.
+  - **Ids derive from the `Id` parameter** (`{Id}-suggestions`,
+    `{Id}-suggestion-{n}`). That is the whole reason two of them can share a
+    page; hardcoding puts duplicate ids in the document and aims both boxes'
+    `aria-activedescendant` at the same rows.
+  - **The exact match is composed in by the caller, not switched on by a flag.**
+    `IngredientMatcher.Suggest` skips it for a reason belonging to *Inventory's*
+    Enter rule; Recipes prepends `ExactMatch` itself, because there an
+    exactly-typed name is the likeliest pick. A `bool includeExactMatch`
+    parameter would encode which page is asking into a pure function.
+  - **The highlight resets on a new `Suggestions` *reference*** (`OnParametersSet`),
+    which works because `Suggest` allocates a fresh list per call. It must not
+    clear `dismissed` there — a pick sets that after the page has already
+    recomputed, and clearing would reopen the list under the name just chosen.
+    A blank `Value` does clear it, and that is what lets a page empty the box
+    and get a fresh list without reaching into the widget.
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
   persists to localStorage. `Components/Layout/ThemeToggle.razor` is a view over
@@ -184,6 +239,17 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     real click or keypress, or it is asserting nothing — this is precisely how
     you would "confirm" the editor's focus behaviour while it was broken. Use it
     for driving a second tab, not for anything you intend to measure.
+  - **A stale `dotnet run` looks exactly like a broken feature.** A server left
+    running across a rebuild served the new markup while behaving as though
+    `@bind-Value:after` never fired — no suggestions, the Add button stuck
+    disabled, every arrow key dead. A restart fixed it with no code change.
+    Restart before believing an interaction is broken, and before writing down
+    a diagnosis.
+  - **Reading the DOM straight after a keypress races the round trip.** Blazor
+    Server patches over a WebSocket, so `ArrowDown` followed immediately by an
+    `aria-activedescendant` read returns the state from *before* the patch —
+    which reads as "arrow keys do nothing". Put a wait between the key and the
+    read, or you will chase a bug that is not there.
   - **Pin the viewport before measuring geometry.** A window resize partway
     through a run made every row's offsets differ and read as "opening a pencil
     still shifts the whole group". Re-run at a fixed size, the real answer was

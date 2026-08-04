@@ -15,6 +15,10 @@ public class RecipeParsingTests
         string output, IReadOnlySet<string> pantry, out string? problem) =>
         ClaudeRecipeGenerator.ParseRecipes(output, pantry, out problem);
 
+    private static List<RecipeSuggestion> ParseExcluding(
+        string output, IReadOnlySet<string> pantry, IReadOnlySet<string> excluded, out string? problem) =>
+        ClaudeRecipeGenerator.ParseRecipes(output, pantry, out problem, excluded);
+
     private const string TwoRecipes =
         """
         {"recipes":[
@@ -174,5 +178,77 @@ public class RecipeParsingTests
             Pantry("Rice"), out _);
 
         Assert.Equal(expected, recipes[0].Minutes);
+    }
+
+    [Fact]
+    public void A_recipe_claiming_an_excluded_inventory_row_is_dropped()
+    {
+        // The first recipe reaches for the row the household said to avoid.
+        // Dropped whole rather than stripped of the ingredient: the steps would
+        // still call for it, and these are alternative choices, so losing one
+        // still leaves the other.
+        var recipes = ParseExcluding(TwoRecipes, Pantry("Rice", "Eggs"), Pantry("RICE"), out var problem);
+
+        Assert.Equal(["Egg drop soup"], recipes.Select(r => r.Title));
+        Assert.Equal("1 recipe(s) used an excluded ingredient", problem);
+    }
+
+    [Fact]
+    public void A_recipe_naming_an_excluded_row_without_a_claim_is_dropped()
+    {
+        var recipes = ParseExcluding(
+            """
+            {"recipes":[{"title":"Pea soup","description":"","minutes":20,
+              "ingredients":[{"name":"peas","quantity":"a bag","inventoryName":null}],
+              "steps":["Simmer."]}]}
+            """,
+            Pantry("Peas"), Pantry("Peas"), out _);
+
+        // No claim, but the name is the row verbatim — the same fallback the
+        // have flag uses one line above. Without it, dropping the claim field
+        // is all it takes to slip an exclusion past.
+        Assert.Empty(recipes);
+    }
+
+    [Fact]
+    public void An_exclusion_that_matches_nothing_leaves_every_recipe_standing()
+    {
+        var recipes = ParseExcluding(
+            TwoRecipes, Pantry("Rice", "Eggs"), Pantry("Anchovies"), out var problem);
+
+        // The guard against an over-eager check quietly emptying the page.
+        Assert.Equal(2, recipes.Count);
+        Assert.Null(problem);
+    }
+
+    [Fact]
+    public void Every_recipe_dropped_for_an_exclusion_still_reports_a_reason()
+    {
+        var recipes = ParseExcluding(
+            TwoRecipes, Pantry("Rice", "Eggs"), Pantry("Rice", "Eggs"), out var problem);
+
+        Assert.Empty(recipes);
+        Assert.Equal("2 recipe(s) used an excluded ingredient, none left", problem);
+    }
+
+    [Fact]
+    public void A_paraphrase_of_an_excluded_row_is_not_caught()
+    {
+        var recipes = ParseExcluding(
+            """
+            {"recipes":[{"title":"Petits pois","description":"","minutes":20,
+              "ingredients":[{"name":"petits pois","quantity":"a bag","inventoryName":null}],
+              "steps":["Simmer."]}]}
+            """,
+            Pantry("Peas"), Pantry("Peas"), out _);
+
+        // This test asserts the limit rather than a guarantee, and it cannot be
+        // broken to prove it bites — there is no line to delete, because there
+        // is no line. Verification catches a *claim* on an excluded row; a
+        // synonym is only ever asked for in the prompt. Deleting this test
+        // would leave the bound undocumented, which is how it turns into a
+        // promise nobody made. Same honesty as
+        // Adding_reports_what_it_did_in_the_live_region.
+        Assert.Single(recipes);
     }
 }
