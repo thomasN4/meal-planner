@@ -1,4 +1,7 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
+﻿@* data-bs-theme="dark" rather than the .navbar-dark class, which 5.3 deprecated
+   in favour of it. The sidebar is a dark island in both app themes, so this is
+   scoped to the bar and does not follow the page. *@
+<div class="top-row ps-3 navbar" data-bs-theme="dark">
     <div class="container-fluid">
         <a class="navbar-brand" href="">MealPlanner</a>
     </div>

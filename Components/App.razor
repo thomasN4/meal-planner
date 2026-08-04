@@ -6,6 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
     <ResourcePreloader />
+    @* Blocking, in <head>, before the stylesheets: it stamps data-bs-theme on
+       <html> ahead of the first paint. Anything later — defer, end of <body>,
+       a Blazor component — shows a frame of the wrong theme first. *@
+    <script src="@Assets["theme.js"]"></script>
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["MealPlanner.styles.css"]" />

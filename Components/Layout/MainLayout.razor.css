@@ -8,13 +8,16 @@ main {
     flex: 1;
 }
 
+/* Left as a fixed navy-to-purple in both themes. It is already dark, it is the
+   one piece of brand colour the app has, and NavMenu paints white on top of it
+   — the sidebar is a dark island whichever way the page goes. */
 .sidebar {
     background-image: linear-gradient(180deg, rgb(5, 39, 103) 0%, #3a0647 70%);
 }
 
 .top-row {
-    background-color: #f7f7f7;
-    border-bottom: 1px solid #d6d5d5;
+    background-color: var(--bs-tertiary-bg);
+    border-bottom: 1px solid var(--bs-border-color);
     justify-content: flex-end;
     height: 3.5rem;
     display: flex;
