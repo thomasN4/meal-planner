@@ -140,6 +140,21 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+- **Driving a real browser is a different instrument, with two traps that both
+  produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
+  layout, `@onmousedown:preventDefault` — so this comes up.
+  - **A programmatic click is not a click.** JS `element.click()` reaches
+    Blazor's handlers, so the write lands and the DOM updates and everything
+    looks right. It does **not** run the focus path: an editor opened that way
+    starts with focus on `<body>`. So every focus assertion has to come from a
+    real click or keypress, or it is asserting nothing — this is precisely how
+    you would "confirm" the editor's focus behaviour while it was broken. Use it
+    for driving a second tab, not for anything you intend to measure.
+  - **Pin the viewport before measuring geometry.** A window resize partway
+    through a run made every row's offsets differ and read as "opening a pencil
+    still shifts the whole group". Re-run at a fixed size, the real answer was
+    zero rows moved. Compare against a snapshot taken at the same width, and
+    treat "everything moved" as a suspected measurement fault first.
 
 ## Conventions & gotchas
 
