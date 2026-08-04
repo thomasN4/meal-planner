@@ -1,0 +1,73 @@
+@rendermode InteractiveServer
+@inject IJSRuntime JS
+
+@* Three states, not two. "Follows my OS" has to stay reachable after someone
+   has toggled once, and a two-way switch loses it forever. *@
+<div class="theme-toggle btn-group btn-group-sm" role="group" aria-label="Colour theme">
+    @foreach (var (value, label) in Choices)
+    {
+        var chosen = mode == value;
+
+        @* aria-pressed carries a string, never a bool: Blazor omits a bool
+           attribute that is false, which would leave the unpressed buttons
+           with no state at all rather than with "false". *@
+        <button type="button"
+                class="btn btn-outline-secondary theme-choice @(chosen ? "active" : null)"
+                aria-pressed="@(chosen ? "true" : "false")"
+                @onclick="@(async () => await ChooseAsync(value))">
+            @label
+        </button>
+    }
+</div>
+
+@code {
+    private const string Fallback = "system";
+
+    private static readonly (string Value, string Label)[] Choices =
+    [
+        (Fallback, "System"),
+        ("light", "Light"),
+        ("dark", "Dark"),
+    ];
+
+    private string mode = Fallback;
+
+    /// <summary>
+    /// theme.js has already resolved and applied the theme before the first
+    /// paint; all this does is bring the buttons into line with what it
+    /// decided. That makes the active marker — and only the active marker —
+    /// arrive a beat after the page does, which is the price of keeping the
+    /// preference in localStorage where the server cannot see it.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        var stored = await JS.InvokeAsync<string>("mealPlannerTheme.get");
+        var known = Normalize(stored);
+
+        if (known != mode)
+        {
+            mode = known;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ChooseAsync(string value)
+    {
+        mode = Normalize(value);
+        await JS.InvokeVoidAsync("mealPlannerTheme.set", mode);
+    }
+
+    /// <summary>
+    /// localStorage is user-writable and survives a rename of these values, so
+    /// anything unrecognised means "we do not know what you wanted" — which is
+    /// what System already means. theme.js applies the same rule; both ends
+    /// guard because either can be reached first.
+    /// </summary>
+    private static string Normalize(string? value) =>
+        Array.Exists(Choices, c => c.Value == value) ? value! : Fallback;
+}
