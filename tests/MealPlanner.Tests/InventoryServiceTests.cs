@@ -580,6 +580,37 @@ public class InventoryServiceTests
     }
 
     [Fact]
+    public async Task A_creation_reports_the_note_it_was_given()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+
+        var change = await harness.Service.UpsertAsync(
+            "Arrow root starch", "1 bag", notes: "for thickening sauces");
+
+        Assert.Equal(ChangeKind.Created, change.Kind);
+        // The auto-categorizer sees creations and nothing else, so this property
+        // is the only route a note has to it (issue #21). PreviousNotes stays
+        // null — there was no before.
+        Assert.Equal("for thickening sauces", change.Notes);
+        Assert.Null(change.PreviousNotes);
+        // Unchanged wording: the note is in the row, not in a one-line status.
+        Assert.Equal("Added \"Arrow root starch\" (1 bag) to Other", change.Describe());
+    }
+
+    [Fact]
+    public async Task A_creation_with_an_empty_note_reports_no_note()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+
+        // The add form sends "" for an empty box. Same rule the update path
+        // follows: null and "" are one note, and neither is a change.
+        var change = await harness.Service.UpsertAsync("Salt", "1 tub", notes: "");
+
+        Assert.Equal(ChangeKind.Created, change.Kind);
+        Assert.Null(change.Notes);
+    }
+
+    [Fact]
     public async Task UpdateItem_reports_NotFound_for_a_row_that_is_gone()
     {
         await using var harness = await InventoryHarness.CreateAsync();

@@ -291,7 +291,16 @@ public class InventoryService
             };
             db.InventoryItems.Add(item);
             await db.SaveChangesAsync(ct);
-            return new InventoryChange(item.Name, ChangeKind.Created, null, quantity, item.Category);
+            return new InventoryChange(item.Name, ChangeKind.Created, null, quantity, item.Category)
+            {
+                // Same "supplied is not changed" rule the update branch below
+                // follows: null → a note is a move, null → "" is not. This is
+                // what carries a note typed on the add form to the
+                // auto-categorizer, which sees creations and nothing else — the
+                // record was the only thing standing between the two (issue
+                // #21). PreviousNotes stays null: there was no before.
+                Notes = string.IsNullOrEmpty(notes) ? null : notes,
+            };
         }
 
         var before = existing.Quantity;
