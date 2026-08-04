@@ -88,6 +88,15 @@
                         disabled="@string.IsNullOrWhiteSpace(newName)">@(matchedItem is null ? "Add" : "Update")</button>
             </div>
         </div>
+        @* Its own full-width line rather than a sixth column: the row above is
+           already 4/3/3/2, and squeezing Notes in would leave it the same strip
+           the row editor used to give it. This is the field's whole reason for
+           being here. *@
+        <div class="mt-2">
+            <label class="form-label mb-1" for="new-notes">Notes</label>
+            <input class="form-control" id="new-notes" placeholder="e.g. back of the top shelf"
+                   @bind="newNotes" @bind:after="OnNotesTouched" maxlength="500"/>
+        </div>
         @* Outside the row on purpose: the row is align-items-end, so anything
            added under the input inside its own column lifts that input out of
            line with the other three. Live, but deliberately not role=status —
@@ -96,7 +105,12 @@
         <div class="name-hint" aria-live="polite">
             @if (matchedItem is not null)
             {
-                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()</span>
+                @* The notes segment appears only when the note is actually
+                   changing, unlike the two beside it which always render. A
+                   fourth always-on clause makes this line long enough that
+                   nobody reads it, and the line exists to warn about overwrites
+                   — an unchanged note is not one. *@
+                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()@HintNotes()</span>
             }
         </div>
         @* The live region stays in the DOM and only its contents change —
@@ -161,66 +175,71 @@ else
                         <tr @key="item.Id" class="@(editing ? "row-editing" : null)">
                             @if (editing)
                             {
-                                @* Every text box here binds on oninput, the same
+                                @* One spanning cell, not five. The editor used to
+                                   sit in the same columns as the view rows, and
+                                   its button cluster made the shrink-to-fit
+                                   action column grow — which took the width from
+                                   the Notes column and shifted every other
+                                   pencil in the group sideways. Out of the
+                                   columns entirely, it cannot move anything, and
+                                   Notes gets room from its own layout rather
+                                   than from whatever three sized columns left
+                                   over.
+
+                                   Every text box binds on oninput, the same
                                    deliberate per-keystroke round trip the add
                                    form uses. Two things ride on it: Save's
                                    disabled state, and Enter — keydown fires
                                    before a plain onchange would have committed,
                                    so Enter-to-save would otherwise write the
                                    value from before the last character. *@
-                                <td style="width: 30%">
-                                    <input class="form-control form-control-sm edit-name"
-                                           @ref="editNameInput"
-                                           aria-label="Name for @item.Name" maxlength="100"
-                                           @bind="editName" @bind:event="oninput"
-                                           @bind:after="() => editNameTouched = true"
-                                           @onkeydown="OnEditKeyDownAsync"/>
-                                </td>
-                                <td style="width: 25%">
-                                    <input class="form-control form-control-sm"
-                                           placeholder="e.g. 2 bags" maxlength="50"
-                                           aria-label="Quantity for @item.Name"
-                                           @bind="editQuantity" @bind:event="oninput"
-                                           @bind:after="() => editQuantityTouched = true"
-                                           @onkeydown="OnEditKeyDownAsync"/>
-                                </td>
-                                <td style="width: 20%">
-                                    @* value=/@onchange rather than @bind: see
-                                       OnEditCategoryChanged. *@
-                                    <select class="form-select form-select-sm"
-                                            value="@editCategory"
-                                            aria-label="Category for @item.Name"
-                                            @onchange="OnEditCategoryChanged">
-                                        @foreach (var c in Enum.GetValues<IngredientCategory>())
-                                        {
-                                            <option value="@c">@Pretty(c)</option>
-                                        }
-                                    </select>
-                                </td>
-                                <td>
-                                    <input class="form-control form-control-sm"
-                                           placeholder="Notes" maxlength="500"
-                                           aria-label="Notes for @item.Name"
-                                           @bind="editNotes" @bind:event="oninput"
-                                           @bind:after="() => editNotesTouched = true"
-                                           @onkeydown="OnEditKeyDownAsync"/>
-                                </td>
-                                <td style="width: 1%">
-                                    @* Delete sits apart from Cancel, and never
-                                       under a ✕: in an edit row that glyph reads
-                                       as "cancel" everywhere else in the world,
-                                       so the same shape would mean "throw this
-                                       away" and "throw this row away" one
-                                       mis-click apart. The gap is the point. *@
-                                    <div class="d-flex align-items-center gap-2">
-                                        <button class="btn btn-outline-danger btn-sm item-remove me-3"
-                                                @onclick="() => DeleteAsync(item.Id)"
-                                                aria-label="Remove @item.Name">🗑</button>
-                                        <button class="btn btn-primary btn-sm item-save"
-                                                @onclick="SaveEditAsync"
-                                                disabled="@string.IsNullOrWhiteSpace(editName)">Save</button>
-                                        <button class="btn btn-outline-secondary btn-sm item-cancel"
-                                                @onclick="CancelEdit">Cancel</button>
+                                <td colspan="5">
+                                    <div class="row-editor">
+                                        <input class="form-control form-control-sm edit-name"
+                                               @ref="editNameInput"
+                                               aria-label="Name for @item.Name" maxlength="100"
+                                               @bind="editName" @bind:event="oninput"
+                                               @bind:after="() => editNameTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        <input class="form-control form-control-sm edit-quantity"
+                                               placeholder="e.g. 2 bags" maxlength="50"
+                                               aria-label="Quantity for @item.Name"
+                                               @bind="editQuantity" @bind:event="oninput"
+                                               @bind:after="() => editQuantityTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        @* value=/@onchange rather than @bind: see
+                                           OnEditCategoryChanged. *@
+                                        <select class="form-select form-select-sm edit-category"
+                                                value="@editCategory"
+                                                aria-label="Category for @item.Name"
+                                                @onchange="OnEditCategoryChanged">
+                                            @foreach (var c in Enum.GetValues<IngredientCategory>())
+                                            {
+                                                <option value="@c">@Pretty(c)</option>
+                                            }
+                                        </select>
+                                        <input class="form-control form-control-sm edit-notes"
+                                               placeholder="Notes" maxlength="500"
+                                               aria-label="Notes for @item.Name"
+                                               @bind="editNotes" @bind:event="oninput"
+                                               @bind:after="() => editNotesTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        @* Delete sits apart from Cancel, and never
+                                           under a ✕: in an edit row that glyph reads
+                                           as "cancel" everywhere else in the world,
+                                           so the same shape would mean "throw this
+                                           away" and "throw this row away" one
+                                           mis-click apart. The gap is the point. *@
+                                        <div class="row-editor-actions">
+                                            <button class="btn btn-outline-danger btn-sm item-remove me-3"
+                                                    @onclick="() => DeleteAsync(item.Id)"
+                                                    aria-label="Remove @item.Name">🗑</button>
+                                            <button class="btn btn-primary btn-sm item-save"
+                                                    @onclick="SaveEditAsync"
+                                                    disabled="@string.IsNullOrWhiteSpace(editName)">Save</button>
+                                            <button class="btn btn-outline-secondary btn-sm item-cancel"
+                                                    @onclick="CancelEdit">Cancel</button>
+                                        </div>
                                     </div>
                                 </td>
                             }
@@ -230,7 +249,12 @@ else
                                 <td style="width: 25%">@item.Quantity</td>
                                 <td style="width: 20%" class="text-muted small">@Pretty(item.Category)</td>
                                 <td class="text-muted small">@item.Notes</td>
-                                <td style="width: 1%">
+                                @* Fixed width, right-aligned. Not width:1% — that
+                                   is shrink-to-fit, so a long note in any sibling
+                                   row re-flows this column too and drags the
+                                   pencils with it. The editor is no longer the
+                                   only thing that could move them. *@
+                                <td class="item-actions">
                                     <button class="btn btn-outline-secondary btn-sm item-edit"
                                             @ref="pencils[item.Id]"
                                             @onclick="() => BeginEdit(item)"
@@ -264,6 +288,7 @@ else
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
+    private string newNotes = string.Empty;
     private string? statusMessage;
     private bool statusIsError;
     private CancellationTokenSource? statusCts;
@@ -283,6 +308,7 @@ else
     // moment the user commits a value of their own, and reset on add.
     private bool categoryTouched;
     private bool quantityTouched;
+    private bool notesTouched;
 
     // Row editor state. The draft lives in these fields rather than in the DOM,
     // and that is not a style choice: the notifier replaces `items` on every
@@ -399,6 +425,10 @@ else
         {
             if (!categoryTouched) newCategory = match.Category;
             if (!quantityTouched) newQuantity = match.Quantity;
+            // Notes autofills for the same reason the other two do, and it
+            // matters more here: Update writes what is in the box, so a note
+            // left un-filled would be an empty string written over a real one.
+            if (!notesTouched) newNotes = match.Notes ?? string.Empty;
         }
         else if (matchedItem is not null)
         {
@@ -407,6 +437,7 @@ else
             // it while the user is still typing it.
             if (!categoryTouched) newCategory = IngredientCategory.Other;
             if (!quantityTouched) newQuantity = string.Empty;
+            if (!notesTouched) newNotes = string.Empty;
         }
 
         matchedItem = match;
@@ -422,6 +453,8 @@ else
     private void OnCategoryTouched() => categoryTouched = true;
 
     private void OnQuantityTouched() => quantityTouched = true;
+
+    private void OnNotesTouched() => notesTouched = true;
 
     private async Task OnNameKeyDownAsync(KeyboardEventArgs e)
     {
@@ -472,6 +505,7 @@ else
         // "I mean this one" in a way that typing a near-miss never does.
         categoryTouched = false;
         quantityTouched = false;
+        notesTouched = false;
         SyncToName();
         // The name is an exact match now, so Suggest drops it — but a longer
         // name may still have it as a prefix ("Salt" → "Salted butter"), and
@@ -494,7 +528,7 @@ else
     private async Task AddAsync()
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory, newNotes);
         // Use the returned category: upsert can land on an existing row whose
         // category differs from what the form still held. Still needed despite
         // the notifier: an upsert reports no PreviousCategory, so a create has
@@ -506,6 +540,7 @@ else
         // typed in the meantime.
         newName = string.Empty;
         newQuantity = string.Empty;
+        newNotes = string.Empty;
         // Reset too: a category left over from the last add silently attached
         // itself to the next ingredient, which is most of why everything ended
         // up needing sorting out by hand in the first place.
@@ -525,6 +560,7 @@ else
         matchedItem = null;
         categoryTouched = false;
         quantityTouched = false;
+        notesTouched = false;
     }
 
     // Ephemeral success line under the add form. A new add cancels the previous
@@ -777,6 +813,17 @@ else
     // Matches InventoryChange.Describe()'s wording for an empty quantity, so
     // the hint and the status line below it don't call the same thing two
     // different things.
+    // Empty unless the note is actually changing — see the hint markup. Leads
+    // with the separator so the caller can concatenate it without a dangling "·"
+    // on the common path.
+    private string HintNotes() =>
+        matchedItem is null || newNotes == (matchedItem.Notes ?? string.Empty)
+            ? string.Empty
+            : $" · {DisplayNotes(matchedItem.Notes)} → {DisplayNotes(newNotes)}";
+
+    private static string DisplayNotes(string? notes) =>
+        string.IsNullOrEmpty(notes) ? "no note" : notes;
+
     private static string DisplayQuantity(string quantity) =>
         string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
 

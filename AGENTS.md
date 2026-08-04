@@ -176,6 +176,15 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   are what stop autofill overwriting something the user typed; `SyncToName` is
   the single place the rule lives, and the notifier calls it too so a live
   write can't leave the hint claiming a row the form is no longer editing.
+  **Notes is on this form too, and autofills by the same rule** — but it matters
+  more there than for the other two: `AddAsync` passes the box straight to
+  `UpsertAsync`, which treats `""` as "clear", so a note left un-filled would be
+  an empty string written over a real one. `notesTouched` is what makes emptying
+  the box mean *clear this* rather than *I never looked*. The hint's notes
+  segment is deliberately asymmetric with the category and quantity ones: it
+  renders only when the note is actually changing, because a fourth always-on
+  clause makes that line too long to read and the line exists to warn about
+  overwrites.
   Suggestions exclude the exact match on purpose — a row in that list can be
   arrowed onto, which would turn Enter from "add" into "fill".
 - **The items table is a draft editor, not a live one.** Rows used to commit
@@ -231,6 +240,22 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   - `✕` never appears in edit mode. It means "cancel" everywhere else in the
     world, so the same glyph would sit one mis-click from "delete this row". The
     trash keeps its own shape and its own gap.
+  - **the editing row is one `<td colspan="5">`, not five cells**, and that is
+    load-bearing rather than cosmetic. Sharing the table's columns meant the
+    editor's button cluster grew the shrink-to-fit action column, which took the
+    width from the notes column and shifted every other pencil in the group
+    sideways — you could not open one row without moving all the others. Out of
+    the columns, it cannot. It also stops Notes being whatever three sized
+    columns left over (~125px). The view rows keep their five cells and the
+    action column is a fixed width, not `width: 1%`, so a long note in one row
+    cannot drag its siblings' pencils either.
+    `The_editor_spans_the_table_instead_of_sharing_its_columns` asserts cell
+    counts, which is the honest proxy — bUnit has no layout, so the pixels are
+    browser-only.
+  - **don't select the editor's fields positionally** (`FindAll("tbody input")[1]`).
+    Five tests did, and survived the relayout only because the input order
+    happened not to change. `edit-name` / `edit-quantity` / `edit-category` /
+    `edit-notes` exist so the next layout change fails loudly instead of quietly.
 - **Renaming goes through `UpdateItemAsync`, keyed by Id**, because a name stops
   being a handle the moment it changes — everything else here keys on Name, which
   the NOCASE index makes identity. Renaming onto a name another row holds returns

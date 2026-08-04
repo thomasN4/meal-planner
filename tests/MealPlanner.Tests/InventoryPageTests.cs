@@ -576,7 +576,7 @@ public class InventoryPageTests
     }
 
     [Fact]
-    public async Task The_row_editor_is_the_only_way_the_UI_can_set_notes()
+    public async Task The_row_editor_stores_notes()
     {
         await using var page = await PageHarness.CreateAsync();
         await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
@@ -584,9 +584,7 @@ public class InventoryPageTests
         Toggle(cut, "Dry Seasonings");
 
         cut.Find("button.item-edit").Click();
-        // Notes was rendered but unreachable before this: only upsert_item over
-        // MCP could write it.
-        cut.FindAll("tbody input")[2].Input("second shelf");
+        cut.Find("input.edit-notes").Input("second shelf");
         cut.Find("button.item-save").Click();
 
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
@@ -676,6 +674,123 @@ public class InventoryPageTests
     }
 
     [Fact]
+    public async Task An_exact_name_fills_in_the_existing_note()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+
+        // Autofill matters more for notes than for the other two: Update writes
+        // what is in this box, so a note left un-filled would be an empty string
+        // written over a real one.
+        Assert.Equal("by the hob", cut.Find("#new-notes").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task A_note_the_user_typed_survives_an_exact_match()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("sal");
+        cut.Find("#new-notes").Change("moved to the pantry");
+        cut.Find("#new-name").Input("salt");
+
+        // The notesTouched half, mirroring the quantity rule exactly.
+        Assert.Equal("moved to the pantry", cut.Find("#new-notes").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task Updating_without_touching_the_note_leaves_it_alone()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+        cut.Find("#new-quantity").Change("2 boxes");
+        cut.Find("button.btn-primary").Click();
+
+        // The round trip the autofill exists to make safe: the form writes the
+        // note back unchanged rather than blanking it on the way past.
+        cut.WaitForAssertion(() => Assert.Contains("2 boxes", cut.Markup, StringComparison.Ordinal));
+        var stored = await page.Service.FindAsync("Salt");
+        Assert.Equal("by the hob", stored!.Notes);
+        Assert.Equal("2 boxes", stored.Quantity);
+    }
+
+    [Fact]
+    public async Task Emptying_the_note_box_clears_the_stored_note()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+        cut.Find("#new-notes").Change("");
+        cut.Find("button.btn-primary").Click();
+
+        // The other side of write-through: clearing has to be possible, or the
+        // box is a one-way street.
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("li[role=option]")));
+        Assert.Equal("", (await page.Service.FindAsync("Salt"))!.Notes);
+    }
+
+    [Fact]
+    public async Task The_hint_mentions_the_note_only_when_it_is_changing()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+
+        // Quiet on the common path. A fourth always-on segment makes this line
+        // long enough that nobody reads it, and it exists to warn about
+        // overwrites — an unchanged note is not one.
+        Assert.DoesNotContain("by the hob", cut.Find("div.name-hint").TextContent, StringComparison.Ordinal);
+
+        cut.Find("#new-notes").Change("moved to the pantry");
+
+        var hint = cut.Find("div.name-hint").TextContent;
+        Assert.Contains("by the hob", hint, StringComparison.Ordinal);
+        Assert.Contains("moved to the pantry", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_editor_spans_the_table_instead_of_sharing_its_columns()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cumin", "1 jar", IngredientCategory.DrySeasonings);
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.FindAll("button.item-edit")[0].Click();
+
+        // The reason the editor was pulled out of the columns: its button
+        // cluster made the shrink-to-fit action column grow, which took width
+        // from the notes column and shifted every other pencil in the group.
+        // A spanning cell cannot do that to its neighbours.
+        //
+        // bUnit has no layout, so cell counts are the honest proxy for "the
+        // editor does not participate in the shared columns" — the pixels are
+        // browser-only. Putting the editor back into five cells turns this red.
+        var rows = cut.FindAll("tbody tr");
+        var editing = rows.Single(r => r.QuerySelector("button.item-save") is not null);
+        var editorCell = Assert.Single(editing.QuerySelectorAll("td"));
+        Assert.Equal("5", editorCell.GetAttribute("colspan"));
+
+        // And the row that is not being edited is untouched — same five cells it
+        // had before anything was opened.
+        var viewRow = rows.Single(r => r.QuerySelector("button.item-edit") is not null);
+        Assert.Equal(5, viewRow.QuerySelectorAll("td").Length);
+    }
+
+    [Fact]
     public async Task Opening_the_editor_moves_focus_into_it()
     {
         await using var page = await PageHarness.CreateAsync();
@@ -736,7 +851,7 @@ public class InventoryPageTests
         cut.Find("button.item-edit").Click();
         var afterOpening = FocusCalls(page);
 
-        cut.FindAll("tbody input")[1].Input("2 jars");
+        cut.Find("input.edit-quantity").Input("2 jars");
         cut.Find("button.item-save").Click();
 
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
@@ -774,7 +889,7 @@ public class InventoryPageTests
         var cut = page.RenderInventory();
         Toggle(cut, "Dairy");
         cut.Find("button.item-edit").Click();
-        cut.FindAll("tbody input")[2].Input("back of the fridge");
+        cut.Find("input.edit-notes").Input("back of the fridge");
 
         // Another tab, or the auto-categorizer a few seconds after an add.
         await page.OutOfCircuitService().SetCategoryAsync("Cheddar", IngredientCategory.Snacks);
@@ -805,7 +920,7 @@ public class InventoryPageTests
         var cut = page.RenderInventory();
         Toggle(cut, "Dairy");
         cut.Find("button.item-edit").Click();
-        cut.FindAll("tbody input")[1].Input("half a block");
+        cut.Find("input.edit-quantity").Input("half a block");
 
         await page.OutOfCircuitService().UpsertAsync("Cheddar", "2 blocks", IngredientCategory.Dairy);
 
@@ -813,7 +928,7 @@ public class InventoryPageTests
         // reach a box the user is in the middle of. Same line the add form's
         // categoryTouched/quantityTouched draw.
         cut.WaitForAssertion(() =>
-            Assert.Equal("half a block", cut.FindAll("tbody input")[1].GetAttribute("value")));
+            Assert.Equal("half a block", cut.Find("input.edit-quantity").GetAttribute("value")));
 
         cut.Find("button.item-save").Click();
 
