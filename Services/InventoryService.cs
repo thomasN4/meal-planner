@@ -72,32 +72,60 @@ public record InventoryChange(
     {
         ChangeKind.Created when string.IsNullOrEmpty(After) => $"Added \"{Name}\" to {Category}",
         ChangeKind.Created => $"Added \"{Name}\" ({After}) to {Category}",
-        // A rename reports only the rename, even when the same write changed a
-        // quantity too: one headline per change, the same way the branches below
-        // already pick one axis. The row is in front of the user showing the rest.
-        ChangeKind.Updated when PreviousName is { } previousName =>
-            $"Renamed \"{previousName}\" to \"{Name}\"",
-        // SetCategoryAsync passes the same quantity on both sides, so it always
-        // lands here and reads as a pure move. The row editor can change both at
-        // once, which SetCategoryAsync never could — hence the branch after it.
-        ChangeKind.Updated when PreviousCategory is { } previous && Before == After =>
-            $"\"{Name}\": {previous} → {Category}",
-        ChangeKind.Updated when PreviousCategory is { } previous =>
-            $"\"{Name}\": {previous} → {Category}, {Display(Before)} → {Display(After)}",
-        // The note moved and nothing else did. Without this branch the write
-        // falls through to the quantity one and reports the value it did not
-        // change — "3 bags → 3 bags" — so a note-only save announces itself as a
-        // no-op, and clearing a note reads identically to writing one. This
-        // status line is the only feedback a save gives.
-        ChangeKind.Updated when NotesMoved && Before == After =>
-            $"\"{Name}\": {NoteVerb()}",
-        ChangeKind.Updated => $"\"{Name}\": {Display(Before)} → {Display(After)}",
+        ChangeKind.Updated => DescribeUpdate(),
         ChangeKind.Removed => $"Removed \"{Name}\"",
         ChangeKind.Unchanged => $"\"{Name}\" unchanged ({Display(After)})",
         ChangeKind.NotFound => $"\"{Name}\" not found",
         ChangeKind.NameTaken => $"\"{Name}\" is already on the list",
         _ => Name,
     };
+
+    /// <summary>
+    /// One clause per field that actually moved, comma-joined.
+    /// <para>
+    /// This used to be a ladder of <c>when</c> branches that each picked a single
+    /// axis, on the reasoning that one headline per change reads better. It does
+    /// not: a write that changed a quantity and a note reported only the
+    /// quantity, so the note silently looked unsaved. Composing is also the only
+    /// shape that stays correct as fields are added — every branch the ladder was
+    /// missing rendered as some *other* field's non-change, which is how both
+    /// "3 bags → 3 bags" bugs got shipped.
+    /// </para>
+    /// <para>
+    /// A rename keeps its own sentence shape rather than becoming a clause:
+    /// <c>"Oats" → "Rolled oats"</c> inside a comma list would be
+    /// indistinguishable from a category or quantity move.
+    /// </para>
+    /// </summary>
+    private string DescribeUpdate()
+    {
+        var clauses = new List<string>(3);
+        if (PreviousCategory is { } previousCategory)
+        {
+            clauses.Add($"{previousCategory} → {Category}");
+        }
+        if (Before != After)
+        {
+            clauses.Add($"{Display(Before)} → {Display(After)}");
+        }
+        if (NotesMoved)
+        {
+            clauses.Add(NoteVerb());
+        }
+
+        if (PreviousName is { } previousName)
+        {
+            var renamed = $"Renamed \"{previousName}\" to \"{Name}\"";
+            return clauses.Count == 0 ? renamed : $"{renamed}, {string.Join(", ", clauses)}";
+        }
+
+        // No clause fired, which means nothing this record can see actually
+        // moved. Report the quantity, which is what this said before there were
+        // clauses — a wrong-looking diff beats an empty one.
+        return clauses.Count == 0
+            ? $"\"{Name}\": {Display(Before)} → {Display(After)}"
+            : $"\"{Name}\": {string.Join(", ", clauses)}";
+    }
 
     private static string Display(string? quantity) =>
         string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
@@ -267,6 +295,7 @@ public class InventoryService
         }
 
         var before = existing.Quantity;
+        var beforeCategory = existing.Category;
         var beforeNotes = existing.Notes;
         // (existing.Notes ?? "") because null and "" both mean "no note" — a row
         // created without one holds null, and the add form sends "" for an empty
@@ -291,8 +320,12 @@ public class InventoryService
             quantity,
             existing.Category)
         {
-            // Only when the note moved — "supplied" is not "changed", the same
-            // rule PreviousName and PreviousCategory follow.
+            // Only when it moved — "supplied" is not "changed", the same rule
+            // PreviousName follows. This path did not set PreviousCategory at
+            // all until now, so changing only the category from the add form
+            // reported the quantity it had not touched: "1 bag → 1 bag". Exactly
+            // the bug reported for notes, one field over.
+            PreviousCategory = beforeCategory != existing.Category ? beforeCategory : null,
             PreviousNotes = notesMoved ? beforeNotes : null,
             Notes = notesMoved ? notes : null,
         };

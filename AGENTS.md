@@ -280,15 +280,27 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   - the collision pre-check needs `&& i.Id != id`. NOCASE means `Name == "Salt"`
     finds the row being edited, so without it every case-only fix ("salt" →
     "Salt") is refused — the one rename the index exists to permit;
-  - `Describe()` needs its **note-only** branch. Notes is the one field with no
-    representation in `Before`/`After`, so without it a note-only save falls
-    through to the quantity branch and announces `"rice": 3 bags → 3 bags` — a
-    no-op, from the only feedback a save gives, with clearing a note reading
-    identically to writing one. It reports the *direction* (added / updated /
-    cleared) and never the note itself: 500 characters do not belong in a
-    one-line status region, and the note is already in the row. A save that
-    changed the quantity *and* the note still leads with the quantity — one
-    headline per change, same as the rename and category branches;
+  - **`Describe()` composes one clause per field that moved** — don't turn it
+    back into a ladder of `when` branches picking a single axis. That ladder
+    shipped the same bug twice: any combination it lacked a branch for rendered
+    as some *other* field's non-change, so a note-only save read
+    `"rice": 3 bags → 3 bags` and a category-only save from the add form read the
+    same. Both are no-ops reported by the only feedback a save gives. Composing
+    is the shape that stays correct when a field is added.
+    Notes reports its *direction* (added / updated / cleared), never the note
+    itself — 500 characters do not belong in a one-line status region, and the
+    note is already in the row. A rename keeps its own sentence shape rather than
+    becoming a clause, because `"a" → "b"` in a comma list is indistinguishable
+    from a category or quantity move, but it no longer swallows the rest;
+  - **every write path must set `PreviousCategory`/`PreviousNotes` when those
+    fields move.** They are what the clauses read, and `UpsertOnceAsync` not
+    setting `PreviousCategory` is what made a category-only add-form save
+    describe the quantity instead. "Supplied" is not "changed" — set them only
+    on an actual move, or the accordion opens groups nobody touched;
+  - **`null` and `""` are the same note.** A row created without one holds
+    `null`; the add form sends `""` for an empty box. Compared raw, every Update
+    on an MCP-created row looked like a note change and published to every
+    circuit. Both write paths compare `(existing.Notes ?? "")`;
   - the retry loop catches `DbUpdateConcurrencyException` only, and a constraint
     violation is answered as `NameTaken` on the spot. Widening it to `IsWriteRace`
     also ends at `NameTaken` (the retry re-reads and the pre-check sees it), so

@@ -505,6 +505,33 @@ public class InventoryServiceTests
     }
 
     [Fact]
+    public async Task Upsert_describes_a_category_only_save_as_a_category_move()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Other);
+
+        // What the add form sends when you type an existing name and change only
+        // the dropdown. This path never set PreviousCategory, so it reported the
+        // quantity it had not touched — "1 bag → 1 bag" — the same shape as the
+        // note bug, one field over, and older than any of it.
+        var change = await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains);
+
+        Assert.Equal(IngredientCategory.Other, change.PreviousCategory);
+        Assert.Equal("\"Oats\": Other → Grains", change.Describe());
+    }
+
+    [Fact]
+    public async Task Upsert_reports_a_category_move_and_a_quantity_change_together()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Other);
+
+        var change = await harness.Service.UpsertAsync("Oats", "2 bags", IngredientCategory.Grains);
+
+        Assert.Equal("\"Oats\": Other → Grains, 1 bag → 2 bags", change.Describe());
+    }
+
+    [Fact]
     public async Task An_empty_note_over_a_row_that_never_had_one_is_not_a_change()
     {
         await using var harness = await InventoryHarness.CreateAsync();
