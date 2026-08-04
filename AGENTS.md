@@ -56,6 +56,14 @@ design: it serves a trusted home LAN.
   `RecipeGeneration` config section's effort `medium` and 180s timeout are
   deliberate divergences from `Categorization`. See
   `docs/plans/2026-07-30-recipe-generation.md`.
+- **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
+  it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
+  persists to localStorage. `Components/Layout/ThemeToggle.razor` is a view over
+  it and never decides the theme itself. Bootstrap is 5.3.3, whose dark palette
+  keys off that attribute and **not** off a `prefers-color-scheme` media query,
+  which is why resolving "follow the system" needs script at all. Three states,
+  not two — "follows my OS" has to stay reachable after someone toggles once.
+  See `docs/plans/2026-08-04-dark-mode.md`.
 
 ## Build & run
 
@@ -312,6 +320,34 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   a message instead.
 - Don't `pkill -f` a pattern that appears in your own command line — it
   matches your own shell. Record and `kill` PIDs instead.
+- **No new colour literals in CSS — use `--bs-*` tokens.** Every hex we owned
+  was either tokenised or deleted when dark mode landed; a fresh one is a
+  hardcode that only works in one of the two palettes. Two mappings are easy to
+  get wrong: muted text is `--bs-secondary-color` (what `.text-muted` resolves
+  to), **not** `--bs-secondary`, which is a fixed grey that sits at ~3:1 on a
+  dark ground; and a focus ring's inner stop must be `var(--bs-body-bg)`, not
+  `white`, or it becomes a bright ring instead of a halo. Deliberate exceptions,
+  all commented where they live: the sidebar gradient (brand, dark in both
+  themes), NavMenu's white-on-navy, and the Blazor error chrome.
+- **The inset bars are not Dark Reader workarounds and do not retire now that
+  we ship a palette.** `.name-suggestion.highlighted`, `.row-editing
+  td:first-child` and `.theme-choice.active` each paint one edge because low
+  contrast arrives from anywhere — an extension, a washed-out panel, sunlight —
+  and none of it can rewrite a painted edge. Never signal state by colour alone;
+  Bootstrap's `.active` on an outline button is exactly that and is why
+  `ThemeToggle` overrides it.
+- **Two traps in the theme plumbing**, both in `theme.js`:
+  - the script is **blocking, in `<head>`, before the stylesheets**. `defer`,
+    end of `<body>`, or a Blazor component that runs when the circuit connects
+    all paint one frame of the wrong theme first;
+  - **enhanced navigation strips `data-bs-theme`.** It re-syncs `<html>`'s
+    attributes against the markup the server sent, and the server sends none, so
+    a NavLink click snaps the page back to light. `Blazor.addEventListener(
+    'enhancedload', apply)` is what puts it back — don't delete it as dead code.
+- **bUnit's `SetupVoid(identifier)` matches only a call with *no* arguments.**
+  A void interop call that carries one falls straight through to Strict mode's
+  exception; use the matcher overload (`SetupVoid(id, _ => true)`) and assert
+  the argument at the call site. `ThemeToggleTests` is the worked example.
 - **`dotnet format` needs the workspace named**: `dotnet format MealPlanner.sln`,
   never bare `dotnet format`. The repo root holds both `MealPlanner.sln` and
   `MealPlanner.csproj`, and format's workspace finder errors on that ambiguity
