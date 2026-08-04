@@ -13,24 +13,25 @@
     outline: none;
 }
 
+/* Mirrors app.css's ring, including why the inner stop is the body background
+   rather than a literal white. */
 .category-toggle:focus-visible,
 .item-remove:focus-visible,
 .item-edit:focus-visible {
-    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+    box-shadow: 0 0 0 0.1rem var(--bs-body-bg), 0 0 0 0.25rem var(--bs-link-color);
     outline: none;
 }
 
-/* Same reasoning as .name-suggestion.highlighted below: the household browses
-   with Dark Reader, and a background tint is the one signal a palette remapper
-   can flatten. It cannot flatten the fact that one edge is painted and the
-   others are not. The swapped buttons are the primary signal that a row is open
-   for editing; this is the backup that survives the extension.
+/* Same reasoning as .name-suggestion.highlighted below: a background tint is
+   the signal that goes first when contrast drops, and nothing can flatten the
+   fact that one edge is painted and the others are not. The swapped buttons are
+   the primary signal that a row is open for editing; this is the backup.
 
    On the first cell rather than the row, because box-shadow on a <tr> is not
    reliably painted across browsers. The editing row now has exactly one cell, so
    this is the whole editor — still one painted edge, which is the point. */
 .row-editing td:first-child {
-    box-shadow: inset 0.1875rem 0 0 #0d6efd;
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
 }
 
 /* The editor lays itself out instead of borrowing the table's columns, which is
@@ -91,7 +92,7 @@
 
 .category-toggle:hover .category-label,
 .category-toggle:focus-visible .category-label {
-    color: #1b6ec2;
+    color: var(--bs-link-hover-color);
 }
 
 .category-chevron {
@@ -100,7 +101,10 @@
     flex-shrink: 0;
     font-size: 0.85rem;
     line-height: 1;
-    color: #6c757d;
+    /* --bs-secondary-color, not --bs-secondary: the former is the muted-text
+       token (what .text-muted resolves to in 5.3) and moves with the theme;
+       the latter is a fixed grey that would sit at 3:1 on a dark ground. */
+    color: var(--bs-secondary-color);
     transition: transform 0.15s ease;
 }
 
@@ -131,10 +135,10 @@
     list-style: none;
     max-height: 15rem;
     overflow-y: auto;
-    background-color: #fff;
-    border: 1px solid #ced4da;
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
     border-radius: 0.375rem;
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    box-shadow: var(--bs-box-shadow);
 }
 
 .name-suggestion {
@@ -149,18 +153,21 @@
 /* Not Bootstrap's .list-group-item.active: that would be a specificity fight
    over a colour we would only be overriding anyway.
 
-   The inset bar is not decoration. This was #e9ecef on #fff, which is a fine
-   highlight until a browser extension remaps the palette — the household
-   browses with Dark Reader, which turns that pair into rgb(35,38,39) on
-   rgb(24,26,27), an 11/255 difference that is invisible at reading size and
-   left arrow-key navigation unusable. A stronger tint helps, but the bar is
-   what actually survives, because a remapper can rewrite a colour and cannot
-   rewrite the fact that one edge is painted and the others are not. Inset
-   rather than border-left so the text does not shift by 3px on highlight. */
+   The inset bar is not decoration, and shipping our own dark palette does not
+   retire it. The highlight was once a near-white tint on white; under a palette
+   remapper that pair collapsed to an 11/255 difference, invisible at reading
+   size, which left arrow-key navigation unusable. A stronger tint helps, but
+   the bar is what actually survives, because low contrast can arrive from any
+   direction — an extension, a washed-out laptop panel, sunlight — and none of
+   them can rewrite the fact that one edge is painted and the others are not.
+   Inset rather than border-left so the text does not shift by 3px on highlight.
+
+   Both colours are now theme tokens, so the tint darkens with the page
+   (--bs-primary-bg-subtle drops to a near-black blue) and the bar lightens. */
 .name-suggestion:hover,
 .name-suggestion.highlighted {
-    background-color: #cfe2ff;
-    box-shadow: inset 0.1875rem 0 0 #0d6efd;
+    background-color: var(--bs-primary-bg-subtle);
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
 }
 
 /* Same trick as the status region above it — empty, the wrapper adds no
@@ -169,5 +176,5 @@
     display: inline-block;
     margin-top: 0.5rem;
     font-size: 0.875rem;
-    color: #6c757d;
+    color: var(--bs-secondary-color);
 }
