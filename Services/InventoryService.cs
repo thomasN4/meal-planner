@@ -44,6 +44,30 @@ public record InventoryChange(
     /// </summary>
     public string? PreviousName { get; init; }
 
+    /// <summary>
+    /// The note before and after, both set only when a mutation actually changed
+    /// it. Same shape and reasoning as the two above.
+    /// <para>
+    /// <see cref="Describe"/> reads only whether each side is empty, never their
+    /// contents: a note runs to 500 characters, and the status line it feeds is
+    /// one line under an add form. "note added" is the useful part; the note
+    /// itself is already in the row.
+    /// </para>
+    /// </summary>
+    public string? PreviousNotes { get; init; }
+
+    /// <inheritdoc cref="PreviousNotes"/>
+    public string? Notes { get; init; }
+
+    private bool NotesMoved => PreviousNotes != Notes;
+
+    private string NoteVerb() => (PreviousNotes, Notes) switch
+    {
+        (null or "", not (null or "")) => "note added",
+        (not (null or ""), null or "") => "note cleared",
+        _ => "note updated",
+    };
+
     public string Describe() => Kind switch
     {
         ChangeKind.Created when string.IsNullOrEmpty(After) => $"Added \"{Name}\" to {Category}",
@@ -60,6 +84,13 @@ public record InventoryChange(
             $"\"{Name}\": {previous} → {Category}",
         ChangeKind.Updated when PreviousCategory is { } previous =>
             $"\"{Name}\": {previous} → {Category}, {Display(Before)} → {Display(After)}",
+        // The note moved and nothing else did. Without this branch the write
+        // falls through to the quantity one and reports the value it did not
+        // change — "3 bags → 3 bags" — so a note-only save announces itself as a
+        // no-op, and clearing a note reads identically to writing one. This
+        // status line is the only feedback a save gives.
+        ChangeKind.Updated when NotesMoved && Before == After =>
+            $"\"{Name}\": {NoteVerb()}",
         ChangeKind.Updated => $"\"{Name}\": {Display(Before)} → {Display(After)}",
         ChangeKind.Removed => $"Removed \"{Name}\"",
         ChangeKind.Unchanged => $"\"{Name}\" unchanged ({Display(After)})",
@@ -236,9 +267,11 @@ public class InventoryService
         }
 
         var before = existing.Quantity;
+        var beforeNotes = existing.Notes;
+        var notesMoved = notes is not null && existing.Notes != notes;
         var changed = before != quantity
             || (category.HasValue && existing.Category != category.Value)
-            || (notes is not null && existing.Notes != notes);
+            || notesMoved;
 
         existing.Quantity = quantity;
         if (category.HasValue) existing.Category = category.Value;
@@ -251,7 +284,13 @@ public class InventoryService
             changed ? ChangeKind.Updated : ChangeKind.Unchanged,
             before,
             quantity,
-            existing.Category);
+            existing.Category)
+        {
+            // Only when the note moved — "supplied" is not "changed", the same
+            // rule PreviousName and PreviousCategory follow.
+            PreviousNotes = notesMoved ? beforeNotes : null,
+            Notes = notesMoved ? notes : null,
+        };
     }
 
     /// <summary>
@@ -454,10 +493,12 @@ public class InventoryService
         var beforeName = existing.Name;
         var beforeQuantity = existing.Quantity;
         var beforeCategory = existing.Category;
+        var beforeNotes = existing.Notes;
+        var notesMoved = notes is not null && existing.Notes != notes;
         var changed = beforeName != name
             || beforeQuantity != quantity
             || beforeCategory != category
-            || (notes is not null && existing.Notes != notes);
+            || notesMoved;
 
         existing.Name = name;
         existing.Quantity = quantity;
@@ -491,6 +532,8 @@ public class InventoryService
             // "this was supplied".
             PreviousName = beforeName != name ? beforeName : null,
             PreviousCategory = beforeCategory != category ? beforeCategory : null,
+            PreviousNotes = notesMoved ? beforeNotes : null,
+            Notes = notesMoved ? notes : null,
         };
     }
 

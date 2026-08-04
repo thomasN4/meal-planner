@@ -86,6 +86,55 @@ public class InventoryChangeTests
     }
 
     [Fact]
+    public void A_note_only_change_says_so_instead_of_reporting_the_quantity_twice()
+    {
+        // Found in browser testing: a note-only save fell through to the
+        // quantity branch and announced "3 bags → 3 bags", so the only feedback
+        // a save gives described a no-op — and clearing a note read exactly the
+        // same as writing one.
+        var same = new InventoryChange("Rice", ChangeKind.Updated, "3 bags", "3 bags", IngredientCategory.Grains);
+
+        Assert.Equal(
+            "\"Rice\": note added",
+            (same with { PreviousNotes = null, Notes = "top shelf" }).Describe());
+        Assert.Equal(
+            "\"Rice\": note updated",
+            (same with { PreviousNotes = "top shelf", Notes = "back of the pantry" }).Describe());
+        Assert.Equal(
+            "\"Rice\": note cleared",
+            (same with { PreviousNotes = "top shelf", Notes = "" }).Describe());
+    }
+
+    [Fact]
+    public void An_empty_note_replacing_a_null_one_is_not_a_change()
+    {
+        // "" and null both render as no note, so a write that swaps one for the
+        // other must not claim the note moved.
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
+        {
+            PreviousNotes = null,
+            Notes = null,
+        };
+
+        Assert.Equal("\"Rice\": 2 bags → 3 bags", change.Describe());
+    }
+
+    [Fact]
+    public void A_quantity_change_still_leads_even_when_the_note_moved_too()
+    {
+        // One headline per change, the same convention the rename and category
+        // branches follow. The note-only branch is for the case where reporting
+        // the quantity would be reporting nothing at all.
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
+        {
+            PreviousNotes = "top shelf",
+            Notes = "back of the pantry",
+        };
+
+        Assert.Equal("\"Rice\": 2 bags → 3 bags", change.Describe());
+    }
+
+    [Fact]
     public void NameTaken_names_the_spelling_that_was_refused()
     {
         Assert.Equal("\"Rice\" is already on the list", Describe(ChangeKind.NameTaken, null, null));

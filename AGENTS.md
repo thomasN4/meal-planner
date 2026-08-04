@@ -265,6 +265,15 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   - the collision pre-check needs `&& i.Id != id`. NOCASE means `Name == "Salt"`
     finds the row being edited, so without it every case-only fix ("salt" →
     "Salt") is refused — the one rename the index exists to permit;
+  - `Describe()` needs its **note-only** branch. Notes is the one field with no
+    representation in `Before`/`After`, so without it a note-only save falls
+    through to the quantity branch and announces `"rice": 3 bags → 3 bags` — a
+    no-op, from the only feedback a save gives, with clearing a note reading
+    identically to writing one. It reports the *direction* (added / updated /
+    cleared) and never the note itself: 500 characters do not belong in a
+    one-line status region, and the note is already in the row. A save that
+    changed the quantity *and* the note still leads with the quantity — one
+    headline per change, same as the rename and category branches;
   - the retry loop catches `DbUpdateConcurrencyException` only, and a constraint
     violation is answered as `NameTaken` on the spot. Widening it to `IsWriteRace`
     also ends at `NameTaken` (the retry re-reads and the pre-check sees it), so

@@ -475,6 +475,51 @@ public class InventoryServiceTests
     }
 
     [Fact]
+    public async Task UpdateItem_describes_a_note_only_save_as_a_note_change()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains, "top shelf");
+        var item = (await harness.Service.FindAsync("Oats"))!;
+
+        var change = await harness.Service.UpdateItemAsync(
+            item.Id, "Oats", "1 bag", IngredientCategory.Grains, "back of the pantry");
+
+        // The row editor's path. Reported "1 bag → 1 bag" before.
+        Assert.Equal("top shelf", change.PreviousNotes);
+        Assert.Equal("\"Oats\": note updated", change.Describe());
+    }
+
+    [Fact]
+    public async Task Upsert_describes_a_note_only_save_as_a_note_change()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains, "top shelf");
+
+        // The add form's path, which reaches this through UpsertAsync rather
+        // than UpdateItemAsync — the browser pass hit the same wording bug from
+        // both, so both are pinned.
+        var cleared = await harness.Service.UpsertAsync(
+            "Oats", "1 bag", IngredientCategory.Grains, "");
+
+        Assert.Equal("\"Oats\": note cleared", cleared.Describe());
+    }
+
+    [Fact]
+    public async Task A_write_that_does_not_supply_notes_reports_no_note_change()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        await harness.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains, "top shelf");
+
+        // notes: null means "keep", so nothing moved and the quantity is the
+        // honest headline — the note flags must not fire on a field that was
+        // simply not supplied.
+        var change = await harness.Service.UpsertAsync("Oats", "2 bags", IngredientCategory.Grains);
+
+        Assert.Null(change.PreviousNotes);
+        Assert.Equal("\"Oats\": 1 bag → 2 bags", change.Describe());
+    }
+
+    [Fact]
     public async Task UpdateItem_reports_NotFound_for_a_row_that_is_gone()
     {
         await using var harness = await InventoryHarness.CreateAsync();
