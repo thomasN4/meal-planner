@@ -88,6 +88,15 @@
                         disabled="@string.IsNullOrWhiteSpace(newName)">@(matchedItem is null ? "Add" : "Update")</button>
             </div>
         </div>
+        @* Its own full-width line rather than a sixth column: the row above is
+           already 4/3/3/2, and squeezing Notes in would leave it the same strip
+           the row editor used to give it. This is the field's whole reason for
+           being here. *@
+        <div class="mt-2">
+            <label class="form-label mb-1" for="new-notes">Notes</label>
+            <input class="form-control" id="new-notes" placeholder="e.g. back of the top shelf"
+                   @bind="newNotes" @bind:after="OnNotesTouched" maxlength="500"/>
+        </div>
         @* Outside the row on purpose: the row is align-items-end, so anything
            added under the input inside its own column lifts that input out of
            line with the other three. Live, but deliberately not role=status —
@@ -96,7 +105,12 @@
         <div class="name-hint" aria-live="polite">
             @if (matchedItem is not null)
             {
-                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()</span>
+                @* The notes segment appears only when the note is actually
+                   changing, unlike the two beside it which always render. A
+                   fourth always-on clause makes this line long enough that
+                   nobody reads it, and the line exists to warn about overwrites
+                   — an unchanged note is not one. *@
+                <span>Updating <strong>@matchedItem.Name</strong> — @HintCategory() · @HintQuantity()@HintNotes()</span>
             }
         </div>
         @* The live region stays in the DOM and only its contents change —
@@ -106,7 +120,10 @@
         <div role="status">
             @if (statusMessage is not null)
             {
-                <div class="alert alert-success py-2 mt-3 mb-0">@statusMessage</div>
+                @* The region announces either way; the colour is only for the
+                   sighted reader, and "someone else deleted the row you were
+                   editing" must not arrive dressed as a success. *@
+                <div class="alert @(statusIsError ? "alert-warning" : "alert-success") py-2 mt-3 mb-0">@statusMessage</div>
             }
         </div>
     </div>
@@ -150,35 +167,114 @@ else
                     <tbody>
                     @foreach (var item in group.OrderBy(i => i.Name))
                     {
+                        var editing = editingId == item.Id;
                         @* Key by id so a deleted row's DOM (and its focus) is
                            torn down rather than patched onto the next item —
-                           otherwise the blue ring on ✕ sticks to the survivor. *@
-                        <tr @key="item.Id">
-                            <td style="width: 30%">@item.Name</td>
-                            <td style="width: 25%">
-                                <input class="form-control form-control-sm"
-                                       value="@item.Quantity"
-                                       placeholder="e.g. 2 bags" maxlength="50"
-                                       @onchange="e => ChangeQuantityAsync(item, e)"/>
-                            </td>
-                            <td style="width: 20%">
-                                <select class="form-select form-select-sm"
-                                        value="@item.Category"
-                                        aria-label="Category for @item.Name"
-                                        @onchange="e => ChangeCategoryAsync(item, e)">
-                                    @foreach (var c in Enum.GetValues<IngredientCategory>())
-                                    {
-                                        <option value="@c">@Pretty(c)</option>
-                                    }
-                                </select>
-                            </td>
-                            <td class="text-muted small">@item.Notes</td>
-                            <td style="width: 1%">
-                                <button class="btn btn-outline-danger btn-sm item-remove"
-                                        @onclick="() => DeleteAsync(item.Id)"
-                                        aria-label="Remove @item.Name">✕</button>
-                            </td>
+                           otherwise the blue ring on the action button sticks to
+                           the survivor. *@
+                        <tr @key="item.Id" class="@(editing ? "row-editing" : null)">
+                            @if (editing)
+                            {
+                                @* One spanning cell, not five. The editor used to
+                                   sit in the same columns as the view rows, and
+                                   its button cluster made the shrink-to-fit
+                                   action column grow — which took the width from
+                                   the Notes column and shifted every other
+                                   pencil in the group sideways. Out of the
+                                   columns entirely, it cannot move anything, and
+                                   Notes gets room from its own layout rather
+                                   than from whatever three sized columns left
+                                   over.
+
+                                   Every text box binds on oninput, the same
+                                   deliberate per-keystroke round trip the add
+                                   form uses. Two things ride on it: Save's
+                                   disabled state, and Enter — keydown fires
+                                   before a plain onchange would have committed,
+                                   so Enter-to-save would otherwise write the
+                                   value from before the last character. *@
+                                <td colspan="5">
+                                    <div class="row-editor">
+                                        <input class="form-control form-control-sm edit-name"
+                                               @ref="editNameInput"
+                                               aria-label="Name for @item.Name" maxlength="100"
+                                               @bind="editName" @bind:event="oninput"
+                                               @bind:after="() => editNameTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        <input class="form-control form-control-sm edit-quantity"
+                                               placeholder="e.g. 2 bags" maxlength="50"
+                                               aria-label="Quantity for @item.Name"
+                                               @bind="editQuantity" @bind:event="oninput"
+                                               @bind:after="() => editQuantityTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        @* value=/@onchange rather than @bind: see
+                                           OnEditCategoryChanged. *@
+                                        <select class="form-select form-select-sm edit-category"
+                                                value="@editCategory"
+                                                aria-label="Category for @item.Name"
+                                                @onchange="OnEditCategoryChanged">
+                                            @foreach (var c in Enum.GetValues<IngredientCategory>())
+                                            {
+                                                <option value="@c">@Pretty(c)</option>
+                                            }
+                                        </select>
+                                        <input class="form-control form-control-sm edit-notes"
+                                               placeholder="Notes" maxlength="500"
+                                               aria-label="Notes for @item.Name"
+                                               @bind="editNotes" @bind:event="oninput"
+                                               @bind:after="() => editNotesTouched = true"
+                                               @onkeydown="OnEditKeyDownAsync"/>
+                                        @* Delete sits apart from Cancel, and never
+                                           under a ✕: in an edit row that glyph reads
+                                           as "cancel" everywhere else in the world,
+                                           so the same shape would mean "throw this
+                                           away" and "throw this row away" one
+                                           mis-click apart. The gap is the point. *@
+                                        <div class="row-editor-actions">
+                                            <button class="btn btn-outline-danger btn-sm item-remove me-3"
+                                                    @onclick="() => DeleteAsync(item.Id)"
+                                                    aria-label="Remove @item.Name">🗑</button>
+                                            <button class="btn btn-primary btn-sm item-save"
+                                                    @onclick="SaveEditAsync"
+                                                    disabled="@string.IsNullOrWhiteSpace(editName)">Save</button>
+                                            <button class="btn btn-outline-secondary btn-sm item-cancel"
+                                                    @onclick="CancelEdit">Cancel</button>
+                                        </div>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td style="width: 30%">@item.Name</td>
+                                <td style="width: 25%">@item.Quantity</td>
+                                <td style="width: 20%" class="text-muted small">@Pretty(item.Category)</td>
+                                <td class="text-muted small">@item.Notes</td>
+                                @* Fixed width, right-aligned. Not width:1% — that
+                                   is shrink-to-fit, so a long note in any sibling
+                                   row re-flows this column too and drags the
+                                   pencils with it. The editor is no longer the
+                                   only thing that could move them. *@
+                                <td class="item-actions">
+                                    <button class="btn btn-outline-secondary btn-sm item-edit"
+                                            @ref="pencils[item.Id]"
+                                            @onclick="() => BeginEdit(item)"
+                                            aria-label="Edit @item.Name">✎</button>
+                                </td>
+                            }
                         </tr>
+                        @if (editing && editError is not null)
+                        {
+                            @* role=alert, not role=status: the add form above
+                               owns this page's one status region, and a second
+                               element answering to it breaks the page's own
+                               tests. alert is what an error wants anyway. *@
+                            var errorKey = $"edit-error-{item.Id}";
+                            <tr @key="errorKey">
+                                <td colspan="5" class="pt-0 border-0">
+                                    <div role="alert" class="alert alert-danger py-1 px-2 mb-0 small">@editError</div>
+                                </td>
+                            </tr>
+                        }
                     }
                     </tbody>
                 </table>
@@ -192,7 +288,9 @@ else
     private string newName = string.Empty;
     private IngredientCategory newCategory = IngredientCategory.Other;
     private string newQuantity = string.Empty;
+    private string newNotes = string.Empty;
     private string? statusMessage;
+    private bool statusIsError;
     private CancellationTokenSource? statusCts;
     private static readonly TimeSpan StatusDuration = TimeSpan.FromSeconds(3);
     // Categories start collapsed; only ones the user opens stay open across
@@ -210,6 +308,45 @@ else
     // moment the user commits a value of their own, and reset on add.
     private bool categoryTouched;
     private bool quantityTouched;
+    private bool notesTouched;
+
+    // Row editor state. The draft lives in these fields rather than in the DOM,
+    // and that is not a style choice: the notifier replaces `items` on every
+    // write from anywhere — the auto-categorizer fires a few seconds after each
+    // add — and the table is grouped by category, so a row whose category moves
+    // is re-rendered under a different @key'd group and its DOM is torn down.
+    // Fields survive that; input values would not. Focus does not survive it
+    // either, which is the price of the grouping and is accepted.
+    private int? editingId;
+    private string editName = string.Empty;
+    private string editQuantity = string.Empty;
+    private IngredientCategory editCategory;
+    private string editNotes = string.Empty;
+    // Shown under the row being edited, not in the page's status region.
+    private string? editError;
+    // Per-field, and the same idea as the add form's categoryTouched: a box the
+    // user has typed in is theirs until they save or cancel, and a box they have
+    // not is still just a picture of the row. Without these, opening an editor
+    // froze a snapshot of all four fields and Save wrote the whole snapshot back
+    // — so a category the auto-categorizer (or another tab) moved in the
+    // meantime got silently reverted by a user who only meant to fix a note.
+    private bool editNameTouched;
+    private bool editQuantityTouched;
+    private bool editCategoryTouched;
+    private bool editNotesTouched;
+    // Opening an editor removes the pencil that was clicked, so focus had
+    // nowhere to land and fell to <body>. That is not cosmetic: the row's Enter
+    // and Escape handlers live on its inputs, so Escape did nothing at all until
+    // the user clicked into a field, and a keyboard user had to tab back through
+    // the nav and the whole add form to reach the row they had just opened.
+    private ElementReference editNameInput;
+    private bool focusEditName;
+    // Closing an editor loses focus the same way opening one did — the inputs go
+    // and the pencil comes back. @ref takes any assignable expression, an
+    // indexer included, so one capture per row costs a dictionary rather than
+    // the pencil markup duplicated across a conditional.
+    private readonly Dictionary<int, ElementReference> pencils = [];
+    private int? focusPencilId;
 
     private const string SuggestionListId = "name-suggestions";
 
@@ -254,10 +391,23 @@ else
             // field that Add would then write back as empty, which is the
             // exact footgun this whole feature exists to close.
             SyncToName();
+            SyncDraftToRow();
+            DropEditIfRowIsGone();
             StateHasChanged();
         });
 
-    private async Task RefreshAsync() => items = await Svc.GetAllAsync();
+    private async Task RefreshAsync()
+    {
+        items = await Svc.GetAllAsync();
+        // Blazor does not clear an element-ref capture when the element goes, so
+        // without this the dictionary keeps a stale entry per deleted row for
+        // the life of the circuit — and these circuits are long-lived.
+        var live = items.Select(i => i.Id).ToHashSet();
+        foreach (var id in pencils.Keys.Where(id => !live.Contains(id)).ToList())
+        {
+            pencils.Remove(id);
+        }
+    }
 
     // The one place the matching rule lives. Called from the name box's
     // @bind:after and from the notifier above, so a live write and a keystroke
@@ -275,6 +425,10 @@ else
         {
             if (!categoryTouched) newCategory = match.Category;
             if (!quantityTouched) newQuantity = match.Quantity;
+            // Notes autofills for the same reason the other two do, and it
+            // matters more here: Update writes what is in the box, so a note
+            // left un-filled would be an empty string written over a real one.
+            if (!notesTouched) newNotes = match.Notes ?? string.Empty;
         }
         else if (matchedItem is not null)
         {
@@ -283,6 +437,7 @@ else
             // it while the user is still typing it.
             if (!categoryTouched) newCategory = IngredientCategory.Other;
             if (!quantityTouched) newQuantity = string.Empty;
+            if (!notesTouched) newNotes = string.Empty;
         }
 
         matchedItem = match;
@@ -298,6 +453,8 @@ else
     private void OnCategoryTouched() => categoryTouched = true;
 
     private void OnQuantityTouched() => quantityTouched = true;
+
+    private void OnNotesTouched() => notesTouched = true;
 
     private async Task OnNameKeyDownAsync(KeyboardEventArgs e)
     {
@@ -348,6 +505,7 @@ else
         // "I mean this one" in a way that typing a near-miss never does.
         categoryTouched = false;
         quantityTouched = false;
+        notesTouched = false;
         SyncToName();
         // The name is an exact match now, so Suggest drops it — but a longer
         // name may still have it as a prefix ("Salt" → "Salted butter"), and
@@ -370,7 +528,7 @@ else
     private async Task AddAsync()
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory);
+        var change = await Svc.UpsertAsync(newName, newQuantity, newCategory, newNotes);
         // Use the returned category: upsert can land on an existing row whose
         // category differs from what the form still held. Still needed despite
         // the notifier: an upsert reports no PreviousCategory, so a create has
@@ -382,6 +540,7 @@ else
         // typed in the meantime.
         newName = string.Empty;
         newQuantity = string.Empty;
+        newNotes = string.Empty;
         // Reset too: a category left over from the last add silently attached
         // itself to the next ingredient, which is most of why everything ended
         // up needing sorting out by hand in the first place.
@@ -401,17 +560,19 @@ else
         matchedItem = null;
         categoryTouched = false;
         quantityTouched = false;
+        notesTouched = false;
     }
 
     // Ephemeral success line under the add form. A new add cancels the previous
     // timer so rapid entry never leaves a stale message behind.
-    private void ShowStatus(string message)
+    private void ShowStatus(string message, bool isError = false)
     {
         statusCts?.Cancel();
         statusCts?.Dispose();
         statusCts = new CancellationTokenSource();
 
         statusMessage = message;
+        statusIsError = isError;
         // Paint it now. A handler re-renders only at its first incomplete await
         // and again on completion, so a message set and cleared between those
         // two points never reaches the browser — which is exactly what happened
@@ -448,28 +609,181 @@ else
         }
     }
 
-    private async Task ChangeQuantityAsync(InventoryItem item, ChangeEventArgs e)
+    private void BeginEdit(InventoryItem item)
     {
-        await Svc.UpsertAsync(item.Name, e.Value?.ToString() ?? "", item.Category);
+        editingId = item.Id;
+        editName = item.Name;
+        editQuantity = item.Quantity;
+        editCategory = item.Category;
+        editNotes = item.Notes ?? string.Empty;
+        editError = null;
+        editNameTouched = false;
+        editQuantityTouched = false;
+        editCategoryTouched = false;
+        editNotesTouched = false;
+        focusEditName = true;
     }
 
-    // The row jumps to another group on the re-render, because the table is
-    // grouped by category — that is the confirmation the change landed.
-    private async Task ChangeCategoryAsync(InventoryItem item, ChangeEventArgs e)
+    // The editor's inputs do not exist until the render this flag survives into,
+    // so the focus call has to wait for it rather than happen in BeginEdit.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!Enum.TryParse<IngredientCategory>(e.Value?.ToString(), out var category)
-            || !Enum.IsDefined(category))
+        var target = NextFocusTarget();
+        if (target is not { } element) return;
+
+        try
+        {
+            await element.FocusAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit went away between render and focus. Nothing to do,
+            // and nothing worth logging — the page is gone.
+        }
+    }
+
+    // Both flags are cleared whether or not a target turns up, so a row that
+    // vanished between the click and this render doesn't leave the page trying
+    // to focus it again on every subsequent paint.
+    private ElementReference? NextFocusTarget()
+    {
+        if (focusEditName)
+        {
+            focusEditName = false;
+            // The row can be gone already — an out-of-circuit delete between the
+            // click and this render — in which case there is no input to focus
+            // and DropEditIfRowIsGone has already closed the editor.
+            return editingId is null ? null : editNameInput;
+        }
+
+        if (focusPencilId is { } id)
+        {
+            focusPencilId = null;
+            return pencils.TryGetValue(id, out var pencil) ? pencil : null;
+        }
+
+        return null;
+    }
+
+    private void CancelEdit()
+    {
+        focusPencilId = editingId;
+        editingId = null;
+        editError = null;
+    }
+
+    // The counterpart to DropEditIfRowIsGone, for a row that changed rather than
+    // vanished. Only boxes the user has left alone follow the row; anything they
+    // have typed in is theirs. Without this the editor shows a row filed under
+    // one category heading while its own dropdown reads another, and Save then
+    // writes the stale one back over whoever moved it.
+    private void SyncDraftToRow()
+    {
+        if (editingId is not { } id || items?.FirstOrDefault(i => i.Id == id) is not { } row)
         {
             return;
         }
 
-        // No ExpandCategory here: this write publishes, and the notifier above
-        // opens the destination for every category move, wherever it came from.
-        await Svc.SetCategoryAsync(item.Name, category);
+        if (!editNameTouched) editName = row.Name;
+        if (!editQuantityTouched) editQuantity = row.Quantity;
+        if (!editCategoryTouched) editCategory = row.Category;
+        if (!editNotesTouched) editNotes = row.Notes ?? string.Empty;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        // Save is disabled on a blank name, but Enter reaches here too.
+        if (editingId is not { } id || string.IsNullOrWhiteSpace(editName)) return;
+
+        var change = await Svc.UpdateItemAsync(id, editName, editQuantity, editCategory, editNotes);
+        if (change.Kind == ChangeKind.NameTaken)
+        {
+            // Stay in edit mode with the draft untouched. The user has to see
+            // which name clashed, and making them retype the row to find out
+            // would be worse than the collision. Nothing was published, so the
+            // table below is exactly as they left it.
+            editError = change.Describe();
+            return;
+        }
+
+        // Only when the row stayed put. A save that changed the category
+        // relocates the row to another group, often off-screen, and FocusAsync
+        // scrolls its target into view — so restoring focus there would yank the
+        // page after the row. Restoring focus means putting the user back where
+        // they were, and once the row has moved there is no such place; the two
+        // alternatives are both worse, since preventScroll would leave focus on
+        // something invisible. Falling back to <body> costs a keyboard user their
+        // place in the tab order, which is the lesser harm and is why the
+        // scroll-free path wins here.
+        //
+        // A rename that re-sorts the row a long way inside its own group has the
+        // same shape, and is not handled: there is no server-side notion of where
+        // a row landed, and the distance is bounded by one group.
+        focusPencilId = change.PreviousCategory is null ? id : null;
+        editingId = null;
+        editError = null;
+        // No RefreshAsync: the write above published, and the notifier handler
+        // has already re-read and re-rendered by the time we get here (issue #1).
+        // No ExpandCategory either — a save that moved the row carries
+        // PreviousCategory, which that same handler acts on.
+        ShowStatus(change.Describe(), isError: change.Kind == ChangeKind.NotFound);
+    }
+
+    // Enum.IsDefined is not redundant with Enum.TryParse: TryParse accepts "99"
+    // and hands back an undefined IngredientCategory, which would reach the
+    // database as the string "99". This is the guard AGENTS.md names, carried
+    // over from the live select this editor replaced — the value now lands in a
+    // draft first, so without it a hand-crafted <option> survives until Save.
+    //
+    // @bind would in fact also be safe — BindConverter rejects "99" outright,
+    // verified rather than assumed — but that is a framework detail nothing in
+    // this repo documents or tests. The page validates its own input.
+    private void OnEditCategoryChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<IngredientCategory>(e.Value?.ToString(), out var category)
+            && Enum.IsDefined(category))
+        {
+            editCategory = category;
+            editCategoryTouched = true;
+        }
+    }
+
+    private async Task OnEditKeyDownAsync(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Enter":
+                await SaveEditAsync();
+                break;
+            case "Escape":
+                CancelEdit();
+                break;
+        }
+    }
+
+    // Someone else — another tab, an MCP tool — removed the row that is open for
+    // editing. Say so rather than letting the draft disappear with the row:
+    // losing typed text is bad, losing it without a word is worse.
+    private void DropEditIfRowIsGone()
+    {
+        if (editingId is not { } id || items is null || items.Any(i => i.Id == id))
+        {
+            return;
+        }
+
+        var name = editName;
+        editingId = null;
+        editError = null;
+        ShowStatus($"\"{name}\" was removed while you were editing it", isError: true);
     }
 
     private async Task DeleteAsync(int id)
     {
+        // Leave edit mode before the write, not after: DeleteAsync publishes,
+        // and the guard above would otherwise announce "removed while you were
+        // editing it" for a removal the user just asked for themselves.
+        editingId = null;
+        editError = null;
         await Svc.DeleteAsync(id);
     }
 
@@ -499,6 +813,17 @@ else
     // Matches InventoryChange.Describe()'s wording for an empty quantity, so
     // the hint and the status line below it don't call the same thing two
     // different things.
+    // Empty unless the note is actually changing — see the hint markup. Leads
+    // with the separator so the caller can concatenate it without a dangling "·"
+    // on the common path.
+    private string HintNotes() =>
+        matchedItem is null || newNotes == (matchedItem.Notes ?? string.Empty)
+            ? string.Empty
+            : $" · {DisplayNotes(matchedItem.Notes)} → {DisplayNotes(newNotes)}";
+
+    private static string DisplayNotes(string? notes) =>
+        string.IsNullOrEmpty(notes) ? "no note" : notes;
+
     private static string DisplayQuantity(string quantity) =>
         string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
 

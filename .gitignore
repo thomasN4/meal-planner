@@ -3,6 +3,31 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+# Anything hanging off a database file too: manual testing leaves things like
+# mealplanner.db.testbackup-182628, which *.db does not match, and a stray
+# git add -A then sweeps the kitchen's data into a commit.
+*.db.*
 .idea/
 *.DotSettings.user
 .claude/
+
+# Nothing here needs a secret today — the app has no auth, and the classifier
+# and recipe generator shell out to `claude -p`, which brings its own
+# credentials. These are here so that stays true by default rather than by luck.
+# For a real secret, prefer `dotnet user-secrets`, which keeps it out of the
+# tree entirely instead of relying on a pattern below matching.
+#
+# appsettings.Development.json is deliberately NOT ignored — it is tracked and
+# holds only config. Put a secret in appsettings.Local.json instead.
+.env
+.env.*
+appsettings.Local.json
+appsettings.*.Local.json
+secrets.json
+credentials.json
+.npmrc
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*

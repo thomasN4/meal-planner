@@ -140,6 +140,21 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+- **Driving a real browser is a different instrument, with two traps that both
+  produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
+  layout, `@onmousedown:preventDefault` — so this comes up.
+  - **A programmatic click is not a click.** JS `element.click()` reaches
+    Blazor's handlers, so the write lands and the DOM updates and everything
+    looks right. It does **not** run the focus path: an editor opened that way
+    starts with focus on `<body>`. So every focus assertion has to come from a
+    real click or keypress, or it is asserting nothing — this is precisely how
+    you would "confirm" the editor's focus behaviour while it was broken. Use it
+    for driving a second tab, not for anything you intend to measure.
+  - **Pin the viewport before measuring geometry.** A window resize partway
+    through a run made every row's offsets differ and read as "opening a pencil
+    still shifts the whole group". Re-run at a fixed size, the real answer was
+    zero rows moved. Compare against a snapshot taken at the same width, and
+    treat "everything moved" as a suspected measurement fault first.
 
 ## Conventions & gotchas
 
@@ -176,8 +191,122 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   are what stop autofill overwriting something the user typed; `SyncToName` is
   the single place the rule lives, and the notifier calls it too so a live
   write can't leave the hint claiming a row the form is no longer editing.
+  **Notes is on this form too, and autofills by the same rule** — but it matters
+  more there than for the other two: `AddAsync` passes the box straight to
+  `UpsertAsync`, which treats `""` as "clear", so a note left un-filled would be
+  an empty string written over a real one. `notesTouched` is what makes emptying
+  the box mean *clear this* rather than *I never looked*. The hint's notes
+  segment is deliberately asymmetric with the category and quantity ones: it
+  renders only when the note is actually changing, because a fourth always-on
+  clause makes that line too long to read and the line exists to warn about
+  overwrites.
   Suggestions exclude the exact match on purpose — a row in that list can be
   arrowed onto, which would turn Enter from "add" into "fill".
+- **The items table is a draft editor, not a live one.** Rows used to commit
+  quantity and category on `@onchange` with no affordance saying so, and `✕` sat
+  one misclick from an unconfirmed delete. Now a pencil opens one row at a time
+  into a draft with explicit Save/Cancel, and delete is only reachable inside it.
+  The draft is a **draft** because a rename can *fail* — mixing "quantity commits
+  on blur, name needs Save" in one row is worse than making the whole row a
+  draft. Load-bearing details:
+  - the draft lives in `@code` fields (`editingId`, `editName`, …), **never** in
+    the DOM. `RefreshAsync` replaces `items` on every write from anywhere, and
+    the table is grouped by category, so a row whose category moves is re-rendered
+    under a different `@key`'d group and its DOM is torn down. Focus is lost
+    there; typed text must not be;
+  - the notifier handler drops edit mode when `editingId` matches no row — some
+    other tab deleted it. `DeleteAsync` clears `editingId` *before* it writes, or
+    that guard announces a removal the user just asked for themselves;
+  - `SyncDraftToRow` is the same handler's answer for a row that *changed* rather
+    than vanished, and it needs the four `edit*Touched` flags to do it. An open
+    editor froze a snapshot of all four fields, so Save wrote the whole snapshot
+    back: the categorizer moved a row to Snacks, the editor went on showing
+    Dairy under a Snacks heading, and a user fixing a note silently reverted it.
+    Untouched boxes follow the row; typed ones are the user's. Same line the add
+    form's `categoryTouched`/`quantityTouched` draw, for the same reason;
+  - the editor moves focus deliberately at both ends (`OnAfterRenderAsync` +
+    `ElementReference`): to the name input on open, back to the row's pencil on
+    Save/Cancel. Not cosmetic — each transition removes the element that had
+    focus, so it fell to `<body>`, and since Enter/Escape live on the row's
+    inputs, **Escape did nothing at all** until the user clicked into a field.
+    Three things worth knowing here:
+    - `@ref` takes any *assignable* expression, an indexer included, so
+      `@ref="pencils[item.Id]"` gives one capture per row. There is no need to
+      duplicate the pencil markup across a conditional to get a ref to one row;
+    - Blazor does **not** clear an element-ref capture when the element goes, so
+      `RefreshAsync` prunes `pencils` against the live ids. Circuits here are
+      long-lived and the alternative is a stale entry per deleted row, forever;
+    - **a save that moved the row to another category deliberately restores no
+      focus.** `FocusAsync` scrolls its target into view, and the row has just
+      relocated to a group that may be nowhere near the viewport, so chasing it
+      drags the page along behind a save. Falling back to `<body>` costs a
+      keyboard user their place in the tab order and never moves the scrollbar,
+      which is the trade this household asked for. `preventScroll: true` is the
+      obvious third option and is worse — focus lands on something invisible.
+      `Saving_a_row_that_stayed_put…` and `Saving_a_move_to_another_group…` pin
+      this from both sides: restoring always fails the second, never restoring
+      fails the first;
+    - bUnit has no focus model but does service
+      `Blazor._internal.domWrapper.focus` even in Strict mode, so every focus
+      test asserts that invocation and each goes red when its `FocusAsync` is
+      removed. They **count** invocations rather than asserting presence —
+      opening already made one, so a bare `Contains` passes with the close doing
+      nothing;
+  - `✕` never appears in edit mode. It means "cancel" everywhere else in the
+    world, so the same glyph would sit one mis-click from "delete this row". The
+    trash keeps its own shape and its own gap.
+  - **the editing row is one `<td colspan="5">`, not five cells**, and that is
+    load-bearing rather than cosmetic. Sharing the table's columns meant the
+    editor's button cluster grew the shrink-to-fit action column, which took the
+    width from the notes column and shifted every other pencil in the group
+    sideways — you could not open one row without moving all the others. Out of
+    the columns, it cannot. It also stops Notes being whatever three sized
+    columns left over (~125px). The view rows keep their five cells and the
+    action column is a fixed width, not `width: 1%`, so a long note in one row
+    cannot drag its siblings' pencils either.
+    `The_editor_spans_the_table_instead_of_sharing_its_columns` asserts cell
+    counts, which is the honest proxy — bUnit has no layout, so the pixels are
+    browser-only.
+  - **don't select the editor's fields positionally** (`FindAll("tbody input")[1]`).
+    Five tests did, and survived the relayout only because the input order
+    happened not to change. `edit-name` / `edit-quantity` / `edit-category` /
+    `edit-notes` exist so the next layout change fails loudly instead of quietly.
+- **Renaming goes through `UpdateItemAsync`, keyed by Id**, because a name stops
+  being a handle the moment it changes — everything else here keys on Name, which
+  the NOCASE index makes identity. Renaming onto a name another row holds returns
+  `ChangeKind.NameTaken`: **rejected, never merged**, because quantity is free
+  text and there is no honest way to combine "2 bags" with "half a bottle". Two
+  things measured rather than assumed, both written up where they live:
+  - the collision pre-check needs `&& i.Id != id`. NOCASE means `Name == "Salt"`
+    finds the row being edited, so without it every case-only fix ("salt" →
+    "Salt") is refused — the one rename the index exists to permit;
+  - **`Describe()` composes one clause per field that moved** — don't turn it
+    back into a ladder of `when` branches picking a single axis. That ladder
+    shipped the same bug twice: any combination it lacked a branch for rendered
+    as some *other* field's non-change, so a note-only save read
+    `"rice": 3 bags → 3 bags` and a category-only save from the add form read the
+    same. Both are no-ops reported by the only feedback a save gives. Composing
+    is the shape that stays correct when a field is added.
+    Notes reports its *direction* (added / updated / cleared), never the note
+    itself — 500 characters do not belong in a one-line status region, and the
+    note is already in the row. A rename keeps its own sentence shape rather than
+    becoming a clause, because `"a" → "b"` in a comma list is indistinguishable
+    from a category or quantity move, but it no longer swallows the rest;
+  - **every write path must set `PreviousCategory`/`PreviousNotes` when those
+    fields move.** They are what the clauses read, and `UpsertOnceAsync` not
+    setting `PreviousCategory` is what made a category-only add-form save
+    describe the quantity instead. "Supplied" is not "changed" — set them only
+    on an actual move, or the accordion opens groups nobody touched;
+  - **`null` and `""` are the same note.** A row created without one holds
+    `null`; the add form sends `""` for an empty box. Compared raw, every Update
+    on an MCP-created row looked like a note change and published to every
+    circuit. Both write paths compare `(existing.Notes ?? "")`;
+  - the retry loop catches `DbUpdateConcurrencyException` only, and a constraint
+    violation is answered as `NameTaken` on the spot. Widening it to `IsWriteRace`
+    also ends at `NameTaken` (the retry re-reads and the pre-check sees it), so
+    that is one round trip saved, not a correctness guard —
+    `Parallel_renames_onto_one_name_leave_exactly_one_winner` passes either way.
+    Don't read its green as proof the narrow catch is required.
 - `InventoryService` methods may throw `ArgumentException` for empty names —
   UI guards before calling; API-ish callers (MCP tools) must catch and return
   a message instead.
@@ -230,3 +359,9 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   applying anything**, so never report an edit as landed without reading the
   body back. `list`, `create`, `checks` and `gh api` are fine. Issue #10.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
+- **Stage explicit paths; never `git add -A`.** It once swept a
+  `mealplanner.db.testbackup-182628` left by manual testing into a commit —
+  `*.db` does not match a name ending in `-182628`. `.gitignore` has been
+  widened (`*.db.*`, plus the usual secret shapes), but the ignore file is the
+  backstop, not the plan: it only catches what somebody thought to list, and the
+  next stray file will have a name nobody predicted. Name what you are committing.

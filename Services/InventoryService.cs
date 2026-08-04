@@ -12,6 +12,7 @@ public enum ChangeKind
     Removed,
     Unchanged,
     NotFound,
+    NameTaken,
 }
 
 /// <summary>
@@ -26,25 +27,105 @@ public record InventoryChange(
     IngredientCategory Category)
 {
     /// <summary>
-    /// Set only by category-only mutations, where Before and After are the same
-    /// quantity and the diff would otherwise read "2 bags → 2 bags". Deliberately
-    /// not a positional member: adding one would rewrite every construction site
-    /// and every test that builds this record positionally.
+    /// Set whenever a mutation moved the item between categories — the
+    /// auto-categorizer, a row editor's save, anyone. The UI reads it directly
+    /// to open the destination group, so it must not depend on how Describe()
+    /// happens to word the change. Deliberately not a positional member: adding
+    /// one would rewrite every construction site and every test that builds this
+    /// record positionally.
     /// </summary>
     public IngredientCategory? PreviousCategory { get; init; }
+
+    /// <summary>
+    /// The name the item had before, when a mutation renamed it. Same shape and
+    /// same reasoning as <see cref="PreviousCategory"/>. <see cref="Name"/> is
+    /// always the name the item has <em>now</em>, except on
+    /// <see cref="ChangeKind.NameTaken"/>, where it is the name that was refused.
+    /// </summary>
+    public string? PreviousName { get; init; }
+
+    /// <summary>
+    /// The note before and after, both set only when a mutation actually changed
+    /// it. Same shape and reasoning as the two above.
+    /// <para>
+    /// <see cref="Describe"/> reads only whether each side is empty, never their
+    /// contents: a note runs to 500 characters, and the status line it feeds is
+    /// one line under an add form. "note added" is the useful part; the note
+    /// itself is already in the row.
+    /// </para>
+    /// </summary>
+    public string? PreviousNotes { get; init; }
+
+    /// <inheritdoc cref="PreviousNotes"/>
+    public string? Notes { get; init; }
+
+    private bool NotesMoved => PreviousNotes != Notes;
+
+    private string NoteVerb() => (PreviousNotes, Notes) switch
+    {
+        (null or "", not (null or "")) => "note added",
+        (not (null or ""), null or "") => "note cleared",
+        _ => "note updated",
+    };
 
     public string Describe() => Kind switch
     {
         ChangeKind.Created when string.IsNullOrEmpty(After) => $"Added \"{Name}\" to {Category}",
         ChangeKind.Created => $"Added \"{Name}\" ({After}) to {Category}",
-        ChangeKind.Updated when PreviousCategory is { } previous =>
-            $"\"{Name}\": {previous} → {Category}",
-        ChangeKind.Updated => $"\"{Name}\": {Display(Before)} → {Display(After)}",
+        ChangeKind.Updated => DescribeUpdate(),
         ChangeKind.Removed => $"Removed \"{Name}\"",
         ChangeKind.Unchanged => $"\"{Name}\" unchanged ({Display(After)})",
         ChangeKind.NotFound => $"\"{Name}\" not found",
+        ChangeKind.NameTaken => $"\"{Name}\" is already on the list",
         _ => Name,
     };
+
+    /// <summary>
+    /// One clause per field that actually moved, comma-joined.
+    /// <para>
+    /// This used to be a ladder of <c>when</c> branches that each picked a single
+    /// axis, on the reasoning that one headline per change reads better. It does
+    /// not: a write that changed a quantity and a note reported only the
+    /// quantity, so the note silently looked unsaved. Composing is also the only
+    /// shape that stays correct as fields are added — every branch the ladder was
+    /// missing rendered as some *other* field's non-change, which is how both
+    /// "3 bags → 3 bags" bugs got shipped.
+    /// </para>
+    /// <para>
+    /// A rename keeps its own sentence shape rather than becoming a clause:
+    /// <c>"Oats" → "Rolled oats"</c> inside a comma list would be
+    /// indistinguishable from a category or quantity move.
+    /// </para>
+    /// </summary>
+    private string DescribeUpdate()
+    {
+        var clauses = new List<string>(3);
+        if (PreviousCategory is { } previousCategory)
+        {
+            clauses.Add($"{previousCategory} → {Category}");
+        }
+        if (Before != After)
+        {
+            clauses.Add($"{Display(Before)} → {Display(After)}");
+        }
+        if (NotesMoved)
+        {
+            clauses.Add(NoteVerb());
+        }
+
+        if (PreviousName is { } previousName)
+        {
+            var renamed = $"Renamed \"{previousName}\" to \"{Name}\"";
+            return clauses.Count == 0 ? renamed : $"{renamed}, {string.Join(", ", clauses)}";
+        }
+
+        // No clause fired, which means nothing this record can see actually
+        // moved. Report the quantity, which is what this said before there were
+        // clauses — a wrong-looking diff beats an empty one.
+        return clauses.Count == 0
+            ? $"\"{Name}\": {Display(Before)} → {Display(After)}"
+            : $"\"{Name}\": {string.Join(", ", clauses)}";
+    }
 
     private static string Display(string? quantity) =>
         string.IsNullOrEmpty(quantity) ? "unspecified" : quantity;
@@ -214,9 +295,17 @@ public class InventoryService
         }
 
         var before = existing.Quantity;
+        var beforeCategory = existing.Category;
+        var beforeNotes = existing.Notes;
+        // (existing.Notes ?? "") because null and "" both mean "no note" — a row
+        // created without one holds null, and the add form sends "" for an empty
+        // box. Comparing them raw makes every Update on an MCP-created row look
+        // like a note change: it reported "note updated", published to every
+        // circuit, and nothing had changed.
+        var notesMoved = notes is not null && (existing.Notes ?? string.Empty) != notes;
         var changed = before != quantity
             || (category.HasValue && existing.Category != category.Value)
-            || (notes is not null && existing.Notes != notes);
+            || notesMoved;
 
         existing.Quantity = quantity;
         if (category.HasValue) existing.Category = category.Value;
@@ -229,7 +318,17 @@ public class InventoryService
             changed ? ChangeKind.Updated : ChangeKind.Unchanged,
             before,
             quantity,
-            existing.Category);
+            existing.Category)
+        {
+            // Only when it moved — "supplied" is not "changed", the same rule
+            // PreviousName follows. This path did not set PreviousCategory at
+            // all until now, so changing only the category from the add form
+            // reported the quantity it had not touched: "1 bag → 1 bag". Exactly
+            // the bug reported for notes, one field over.
+            PreviousCategory = beforeCategory != existing.Category ? beforeCategory : null,
+            PreviousNotes = notesMoved ? beforeNotes : null,
+            Notes = notesMoved ? notes : null,
+        };
     }
 
     /// <summary>
@@ -340,45 +439,154 @@ public class InventoryService
         return change;
     }
 
-    /// <summary>Save an item edited in the UI (create or update by Id).</summary>
-    public async Task SaveAsync(InventoryItem item, CancellationToken ct = default)
+    /// <summary>
+    /// Rewrites one existing row, identified by <paramref name="id"/>, in a
+    /// single write — the inventory page's row editor.
+    /// <para>
+    /// Keyed by Id rather than name because this is the one mutation that can
+    /// change the name, and a name stops being a handle the moment it does.
+    /// Everything else here keys on Name, which the NOCASE unique index makes
+    /// identity; renaming is precisely the operation that identity can't express.
+    /// </para>
+    /// <para>
+    /// <paramref name="notes"/> of <c>null</c> keeps the stored value, matching
+    /// <see cref="UpsertAsync"/>. Callers that mean "clear the notes" pass "".
+    /// </para>
+    /// <para>
+    /// Renaming onto a name another row already holds returns
+    /// <see cref="ChangeKind.NameTaken"/> rather than merging. Quantity is free
+    /// text, so there is no defensible way to combine "2 bags" with "half a
+    /// bottle" — the caller is told, and decides.
+    /// </para>
+    /// </summary>
+    public async Task<InventoryChange> UpdateItemAsync(
+        int id,
+        string name,
+        string quantity,
+        IngredientCategory category,
+        string? notes = null,
+        CancellationToken ct = default)
     {
-        item.Name = NormalizeName(item.Name);
-        item.Quantity = NormalizeQuantity(item.Quantity);
-        item.Notes = NormalizeNotes(item.Notes);
-        item.UpdatedAt = DateTime.UtcNow;
-        var creating = item.Id == 0;
-        await using var db = await _factory.CreateDbContextAsync(ct);
+        name = NormalizeName(name);
+        quantity = NormalizeQuantity(quantity);
+        notes = NormalizeNotes(notes);
 
-        // The caller hands us an item it has already edited, so the old
-        // quantity only exists in the database. Read it before saving, or the
-        // diff reports "unspecified → 3 bags" for every update. Projecting to
-        // the string rather than loading the row keeps EF from tracking a
-        // second instance of this key, which Update(item) would then reject.
-        var before = creating
-            ? null
-            : await db.InventoryItems
-                .Where(i => i.Id == item.Id)
-                .Select(i => i.Quantity)
-                .FirstOrDefaultAsync(ct);
-
-        if (creating)
+        // Narrower than UpsertAsync's loop: DbUpdateConcurrencyException only,
+        // not IsWriteRace. The one race worth retrying here is the row being
+        // deleted underneath us, which re-reads into a clean NotFound.
+        //
+        // A name collision is handled in UpdateOnceAsync instead. Measured, not
+        // assumed: widening this to IsWriteRace also ends at NameTaken, because
+        // the losing writer's retry re-reads and its pre-check now sees the name
+        // taken — so this is one round trip saved, not a correctness guard, and
+        // Parallel_renames_onto_one_name_leave_exactly_one_winner passes either
+        // way. It is written out because "why isn't this IsWriteRace like the
+        // other two loops" is the question a reader will actually have.
+        InventoryChange change;
+        for (var attempt = 0; ; attempt++)
         {
-            db.InventoryItems.Add(item);
+            try
+            {
+                change = await UpdateOnceAsync(id, name, quantity, category, notes, ct);
+                break;
+            }
+            catch (DbUpdateConcurrencyException)
+                when (attempt < MaxUpsertAttempts - 1)
+            {
+                if (attempt > 0)
+                {
+                    await Task.Delay(Random.Shared.Next(2, 10) * attempt, ct);
+                }
+            }
         }
-        else
-        {
-            db.InventoryItems.Update(item);
-        }
-        await db.SaveChangesAsync(ct);
 
-        await PublishIfMeaningfulAsync(new InventoryChange(
-            item.Name,
-            creating ? ChangeKind.Created : ChangeKind.Updated,
-            Before: before,
-            After: item.Quantity,
-            Category: item.Category));
+        await PublishIfMeaningfulAsync(change);
+        return change;
     }
+
+    private async Task<InventoryChange> UpdateOnceAsync(
+        int id,
+        string name,
+        string quantity,
+        IngredientCategory category,
+        string? notes,
+        CancellationToken ct)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var existing = await db.InventoryItems.FirstOrDefaultAsync(i => i.Id == id, ct);
+        if (existing is null)
+        {
+            return new InventoryChange(name, ChangeKind.NotFound, null, null, category);
+        }
+
+        // i.Id != id is not defensive, it is required: the Name column collates
+        // NOCASE, so "Salt" matches the row we are editing when its stored name
+        // is "salt". Without it, every case-only fix reports a collision with
+        // itself and the one thing the NOCASE index exists to allow is refused.
+        if (await db.InventoryItems.AnyAsync(i => i.Name == name && i.Id != id, ct))
+        {
+            return new InventoryChange(name, ChangeKind.NameTaken, null, null, category);
+        }
+
+        var beforeName = existing.Name;
+        var beforeQuantity = existing.Quantity;
+        var beforeCategory = existing.Category;
+        var beforeNotes = existing.Notes;
+        // (existing.Notes ?? "") because null and "" both mean "no note" — a row
+        // created without one holds null, and the add form sends "" for an empty
+        // box. Comparing them raw makes every Update on an MCP-created row look
+        // like a note change: it reported "note updated", published to every
+        // circuit, and nothing had changed.
+        var notesMoved = notes is not null && (existing.Notes ?? string.Empty) != notes;
+        var changed = beforeName != name
+            || beforeQuantity != quantity
+            || beforeCategory != category
+            || notesMoved;
+
+        existing.Name = name;
+        existing.Quantity = quantity;
+        existing.Category = category;
+        if (notes is not null) existing.Notes = notes;
+        existing.UpdatedAt = DateTime.UtcNow;
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsNameCollision(ex))
+        {
+            // Reached for real — the pre-check above cannot close the gap
+            // between itself and this write, and the parallel-rename test drives
+            // writers through here every run. Answering directly rather than
+            // letting the retry loop handle it, because a retry can only re-read
+            // and reach the same NameTaken one round trip later.
+            return new InventoryChange(name, ChangeKind.NameTaken, null, null, category);
+        }
+
+        return new InventoryChange(
+            name,
+            changed ? ChangeKind.Updated : ChangeKind.Unchanged,
+            beforeQuantity,
+            quantity,
+            category)
+        {
+            // Each set only when that field actually moved, so Describe() and
+            // the page's accordion both read them as "this changed", not
+            // "this was supplied".
+            PreviousName = beforeName != name ? beforeName : null,
+            PreviousCategory = beforeCategory != category ? beforeCategory : null,
+            PreviousNotes = notesMoved ? beforeNotes : null,
+            Notes = notesMoved ? notes : null,
+        };
+    }
+
+    /// <summary>
+    /// The unique Name index rejecting a write. Distinct from
+    /// <see cref="IsWriteRace"/>, which folds this together with a deleted row:
+    /// here the two need opposite handling.
+    /// </summary>
+    private static bool IsNameCollision(DbUpdateException ex) =>
+        ex.InnerException is SqliteException { SqliteErrorCode: 19 }; // SQLITE_CONSTRAINT
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
     {

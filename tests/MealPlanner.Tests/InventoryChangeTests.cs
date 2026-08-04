@@ -42,4 +42,119 @@ public class InventoryChangeTests
         Assert.Equal("Removed \"Rice\"", Describe(ChangeKind.Removed, "2 bags", null));
         Assert.Equal("\"Rice\" not found", Describe(ChangeKind.NotFound, null, null));
     }
+
+    [Fact]
+    public void A_rename_names_both_spellings()
+    {
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "2 bags", IngredientCategory.Grains)
+        {
+            PreviousName = "rise",
+        };
+
+        Assert.Equal("Renamed \"rise\" to \"Rice\"", change.Describe());
+    }
+
+    [Fact]
+    public void A_rename_leads_but_does_not_swallow_the_rest_of_the_write()
+    {
+        // A rename keeps its own sentence shape — "rise" → "Rice" inside a comma
+        // list would be indistinguishable from a category or quantity move — but
+        // it no longer hides what else the same save did.
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "1 bag", IngredientCategory.Grains)
+        {
+            PreviousName = "rise",
+            PreviousCategory = IngredientCategory.Other,
+        };
+
+        Assert.Equal(
+            "Renamed \"rise\" to \"Rice\", Other → Grains, 2 bags → 1 bag",
+            change.Describe());
+    }
+
+    [Fact]
+    public void A_category_move_that_also_changed_the_quantity_reports_both()
+    {
+        // SetCategoryAsync passes the same quantity on both sides and reads as a
+        // pure move; the row editor can change both in one write, and a diff
+        // that hid half of it would be the same footgun the add form's hint
+        // exists to close.
+        var moveOnly = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "2 bags", IngredientCategory.Grains)
+        {
+            PreviousCategory = IngredientCategory.Other,
+        };
+        var moveAndRequantify = moveOnly with { Before = "2 bags", After = "1 bag" };
+
+        Assert.Equal("\"Rice\": Other → Grains", moveOnly.Describe());
+        Assert.Equal("\"Rice\": Other → Grains, 2 bags → 1 bag", moveAndRequantify.Describe());
+    }
+
+    [Fact]
+    public void A_note_only_change_says_so_instead_of_reporting_the_quantity_twice()
+    {
+        // Found in browser testing: a note-only save fell through to the
+        // quantity branch and announced "3 bags → 3 bags", so the only feedback
+        // a save gives described a no-op — and clearing a note read exactly the
+        // same as writing one.
+        var same = new InventoryChange("Rice", ChangeKind.Updated, "3 bags", "3 bags", IngredientCategory.Grains);
+
+        Assert.Equal(
+            "\"Rice\": note added",
+            (same with { PreviousNotes = null, Notes = "top shelf" }).Describe());
+        Assert.Equal(
+            "\"Rice\": note updated",
+            (same with { PreviousNotes = "top shelf", Notes = "back of the pantry" }).Describe());
+        Assert.Equal(
+            "\"Rice\": note cleared",
+            (same with { PreviousNotes = "top shelf", Notes = "" }).Describe());
+    }
+
+    [Fact]
+    public void A_change_that_left_the_note_alone_describes_the_quantity()
+    {
+        // Both null is "the note was not supplied, or did not move" — the
+        // quantity is then the only honest headline.
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
+        {
+            PreviousNotes = null,
+            Notes = null,
+        };
+
+        Assert.Equal("\"Rice\": 2 bags → 3 bags", change.Describe());
+    }
+
+    [Fact]
+    public void A_write_that_moved_two_fields_reports_both()
+    {
+        // The note verbs are three words, so there is room to show them beside a
+        // quantity rather than choosing between them. Reporting only the
+        // quantity left the note looking unsaved.
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
+        {
+            PreviousNotes = "top shelf",
+            Notes = "back of the pantry",
+        };
+
+        Assert.Equal("\"Rice\": 2 bags → 3 bags, note updated", change.Describe());
+    }
+
+    [Fact]
+    public void A_write_that_moved_everything_reports_everything()
+    {
+        var change = new InventoryChange("Rice", ChangeKind.Updated, "2 bags", "3 bags", IngredientCategory.Grains)
+        {
+            PreviousCategory = IngredientCategory.Other,
+            PreviousNotes = null,
+            Notes = "top shelf",
+        };
+
+        Assert.Equal(
+            "\"Rice\": Other → Grains, 2 bags → 3 bags, note added",
+            change.Describe());
+    }
+
+    [Fact]
+    public void NameTaken_names_the_spelling_that_was_refused()
+    {
+        Assert.Equal("\"Rice\" is already on the list", Describe(ChangeKind.NameTaken, null, null));
+    }
 }

@@ -428,13 +428,22 @@ public class InventoryPageTests
         await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
         var cut = page.RenderInventory();
         Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
 
         cut.Find("select.form-select-sm").Change("NotACategory");
 
         // Enum.TryParse would also accept "99" and hand back an undefined value,
-        // which is why the guard checks Enum.IsDefined too.
+        // which is why the guard checks Enum.IsDefined too. Deleting either half
+        // of that check turns this red.
+        //
+        // It does not bite for the *shape* of the binding: swapping the handler
+        // for @bind leaves this green, because BindConverter happens to reject
+        // "99" as well. What this pins is the outcome — an undefined category
+        // never reaches the database — not which code stops it.
         cut.Find("select.form-select-sm").Change("99");
+        cut.Find("button.item-save").Click();
 
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
         var item = await page.Service.FindAsync("Paprika");
         Assert.Equal(IngredientCategory.DrySeasonings, item?.Category);
     }
@@ -447,11 +456,204 @@ public class InventoryPageTests
         var cut = page.RenderInventory();
         Toggle(cut, "Dry Seasonings");
 
+        // Delete is only reachable through the editor now, which is the whole
+        // point: it used to be one misclick away with no confirmation at all.
+        cut.Find("button.item-edit").Click();
         cut.Find("button.item-remove").Click();
 
         cut.WaitForAssertion(() =>
             Assert.DoesNotContain("Paprika", cut.Markup, StringComparison.Ordinal));
         Assert.Equal(0, await page.CountAsync());
+    }
+
+    [Fact]
+    public async Task A_row_offers_nothing_to_edit_until_the_pencil_is_clicked()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        // The table used to commit quantity and category on change, with no
+        // affordance saying so, and ✕ sat there ready to delete unconfirmed.
+        Assert.Empty(cut.FindAll("tbody input"));
+        Assert.Empty(cut.FindAll("tbody select"));
+        Assert.Empty(cut.FindAll("button.item-remove"));
+
+        cut.Find("button.item-edit").Click();
+
+        Assert.NotEmpty(cut.FindAll("tbody input"));
+        Assert.NotEmpty(cut.FindAll("tbody select"));
+        Assert.Single(cut.FindAll("button.item-remove"));
+    }
+
+    [Fact]
+    public async Task Editing_a_row_renames_it_in_place()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Corriander", "1 bunch", IngredientCategory.FreshHerbs);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Fresh Herbs");
+
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-name").Input("Coriander");
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains(
+                "Renamed \"Corriander\" to \"Coriander\"",
+                cut.Find("div[role=status]").TextContent,
+                StringComparison.Ordinal));
+        // A rename moves the row it started from; it does not leave a second one.
+        Assert.Equal(1, await page.CountAsync());
+        Assert.NotNull(await page.Service.FindAsync("Coriander"));
+    }
+
+    [Fact]
+    public async Task A_rename_onto_an_existing_name_is_refused_and_keeps_the_draft()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Oats", "1 bag", IngredientCategory.Grains);
+        await page.Service.UpsertAsync("Rice", "2 bags", IngredientCategory.Grains);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Grains");
+
+        // Rows sort by name, so the first pencil is Oats'.
+        cut.FindAll("button.item-edit")[0].Click();
+        cut.Find("input.edit-name").Input("rice");
+        cut.Find("button.item-save").Click();
+
+        // role=alert, not the page's role=status region — a second element
+        // answering to that role would break the add form's own tests.
+        cut.WaitForAssertion(() =>
+            Assert.Contains(
+                "\"rice\" is already on the list",
+                cut.Find("div[role=alert]").TextContent,
+                StringComparison.Ordinal));
+        // Still editing, still holding what was typed: making the user retype
+        // the row to find out which name clashed would be worse than the clash.
+        Assert.Equal("rice", cut.Find("input.edit-name").GetAttribute("value"));
+        Assert.NotEmpty(cut.FindAll("button.item-save"));
+        // And nothing was merged away.
+        Assert.Equal(2, await page.CountAsync());
+        Assert.Equal("2 bags", (await page.Service.FindAsync("Rice"))!.Quantity);
+    }
+
+    [Fact]
+    public async Task A_rename_that_only_changes_case_is_accepted()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("salt", "1 box", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-name").Input("Salt");
+        cut.Find("button.item-save").Click();
+
+        // The NOCASE index makes these one row, so the collision check has to
+        // exclude the row being edited or fixing capitalisation is impossible.
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("div[role=alert]")));
+        Assert.Equal(1, await page.CountAsync());
+        Assert.Contains("Salt", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Cancelling_leaves_the_row_as_it_was()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-name").Input("Smoked paprika");
+        cut.Find("button.item-cancel").Click();
+
+        Assert.Empty(cut.FindAll("button.item-save"));
+        Assert.Contains("Paprika", cut.Markup, StringComparison.Ordinal);
+        Assert.NotNull(await page.Service.FindAsync("Paprika"));
+    }
+
+    [Fact]
+    public async Task The_row_editor_stores_notes()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-notes").Input("second shelf");
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        Assert.Equal("second shelf", (await page.Service.FindAsync("Paprika"))!.Notes);
+    }
+
+    [Fact]
+    public async Task Saving_a_category_change_opens_the_destination_group()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.Other);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Other");
+
+        cut.Find("button.item-edit").Click();
+        cut.Find("select.form-select-sm").Change(nameof(IngredientCategory.DrySeasonings));
+        cut.Find("button.item-save").Click();
+
+        // The existing test covers the out-of-circuit path; this is the page's
+        // own write reaching the same PreviousCategory branch, which it only
+        // does because UpdateItemAsync sets that field when the row moves.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal("true", Header(cut, "Dry Seasonings").GetAttribute("aria-expanded"));
+            Assert.Contains("Paprika", cut.Markup, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task A_row_deleted_by_someone_else_while_open_drops_out_of_the_editor()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-name").Input("Smoked paprika");
+
+        // Another tab, or an MCP tool. The draft is about to become unsavable.
+        await page.OutOfCircuitService().RemoveAsync("Paprika");
+
+        // Losing typed text is bad; losing it without a word is worse.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Empty(cut.FindAll("button.item-save"));
+            Assert.Contains(
+                "was removed while you were editing it",
+                cut.Find("div[role=status]").TextContent,
+                StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task A_draft_survives_a_refresh_from_another_circuit()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-name").Input("Smoked paprika");
+
+        // RefreshAsync replaces `items` wholesale on every write from anywhere,
+        // and the auto-categorizer does this a few seconds after every add. The
+        // draft lives in page fields for exactly this reason.
+        await page.OutOfCircuitService().UpsertAsync("Cumin", "1 jar", IngredientCategory.DrySeasonings);
+
+        cut.WaitForAssertion(() => Assert.Contains("Cumin", cut.Markup, StringComparison.Ordinal));
+        Assert.Equal("Smoked paprika", cut.Find("input.edit-name").GetAttribute("value"));
     }
 
     [Fact]
@@ -469,6 +671,269 @@ public class InventoryPageTests
         await page.OutOfCircuitService().UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
 
         Assert.Contains(page.Log.Entries, e => e.Message.Contains("to 0 subscriber(s)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_exact_name_fills_in_the_existing_note()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+
+        // Autofill matters more for notes than for the other two: Update writes
+        // what is in this box, so a note left un-filled would be an empty string
+        // written over a real one.
+        Assert.Equal("by the hob", cut.Find("#new-notes").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task A_note_the_user_typed_survives_an_exact_match()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("sal");
+        cut.Find("#new-notes").Change("moved to the pantry");
+        cut.Find("#new-name").Input("salt");
+
+        // The notesTouched half, mirroring the quantity rule exactly.
+        Assert.Equal("moved to the pantry", cut.Find("#new-notes").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task Updating_without_touching_the_note_leaves_it_alone()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+        cut.Find("#new-quantity").Change("2 boxes");
+        cut.Find("button.btn-primary").Click();
+
+        // The round trip the autofill exists to make safe: the form writes the
+        // note back unchanged rather than blanking it on the way past.
+        cut.WaitForAssertion(() => Assert.Contains("2 boxes", cut.Markup, StringComparison.Ordinal));
+        var stored = await page.Service.FindAsync("Salt");
+        Assert.Equal("by the hob", stored!.Notes);
+        Assert.Equal("2 boxes", stored.Quantity);
+    }
+
+    [Fact]
+    public async Task Emptying_the_note_box_clears_the_stored_note()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+        cut.Find("#new-notes").Change("");
+        cut.Find("button.btn-primary").Click();
+
+        // The other side of write-through: clearing has to be possible, or the
+        // box is a one-way street.
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("li[role=option]")));
+        Assert.Equal("", (await page.Service.FindAsync("Salt"))!.Notes);
+    }
+
+    [Fact]
+    public async Task The_hint_mentions_the_note_only_when_it_is_changing()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Salt", "1 box", IngredientCategory.DrySeasonings, "by the hob");
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("salt");
+
+        // Quiet on the common path. A fourth always-on segment makes this line
+        // long enough that nobody reads it, and it exists to warn about
+        // overwrites — an unchanged note is not one.
+        Assert.DoesNotContain("by the hob", cut.Find("div.name-hint").TextContent, StringComparison.Ordinal);
+
+        cut.Find("#new-notes").Change("moved to the pantry");
+
+        var hint = cut.Find("div.name-hint").TextContent;
+        Assert.Contains("by the hob", hint, StringComparison.Ordinal);
+        Assert.Contains("moved to the pantry", hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_editor_spans_the_table_instead_of_sharing_its_columns()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cumin", "1 jar", IngredientCategory.DrySeasonings);
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.FindAll("button.item-edit")[0].Click();
+
+        // The reason the editor was pulled out of the columns: its button
+        // cluster made the shrink-to-fit action column grow, which took width
+        // from the notes column and shifted every other pencil in the group.
+        // A spanning cell cannot do that to its neighbours.
+        //
+        // bUnit has no layout, so cell counts are the honest proxy for "the
+        // editor does not participate in the shared columns" — the pixels are
+        // browser-only. Putting the editor back into five cells turns this red.
+        var rows = cut.FindAll("tbody tr");
+        var editing = rows.Single(r => r.QuerySelector("button.item-save") is not null);
+        var editorCell = Assert.Single(editing.QuerySelectorAll("td"));
+        Assert.Equal("5", editorCell.GetAttribute("colspan"));
+
+        // And the row that is not being edited is untouched — same five cells it
+        // had before anything was opened.
+        var viewRow = rows.Single(r => r.QuerySelector("button.item-edit") is not null);
+        Assert.Equal(5, viewRow.QuerySelectorAll("td").Length);
+    }
+
+    [Fact]
+    public async Task Opening_the_editor_moves_focus_into_it()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+
+        cut.Find("button.item-edit").Click();
+
+        // bUnit has no focus model, so this asserts the framework interop call
+        // rather than where the caret ended up — but the call is the fix, and
+        // deleting the FocusAsync turns this red.
+        //
+        // Opening the editor removes the pencil that was clicked, so without it
+        // focus falls to <body>. The row's Enter and Escape handlers live on its
+        // inputs, which made Escape a no-op until the user clicked into a field,
+        // and left keyboard users tabbing back through the nav and the whole add
+        // form to reach a row they had just opened.
+        Assert.Contains(
+            page.JSInterop.Invocations,
+            i => i.Identifier == "Blazor._internal.domWrapper.focus");
+    }
+
+    [Fact]
+    public async Task Closing_the_editor_puts_focus_back_on_the_pencil()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = FocusCalls(page);
+
+        cut.Find("button.item-cancel").Click();
+
+        // The mirror of opening: the editor's inputs go and the pencil comes
+        // back, so focus falls to <body> unless it is put somewhere. Counting
+        // rather than just asserting presence — the open already made one call,
+        // so a bare Contains would pass with the close doing nothing.
+        Assert.Equal(afterOpening + 1, FocusCalls(page));
+    }
+
+    /// <summary>
+    /// How many times the page has asked the browser to move focus. bUnit has no
+    /// focus model, but it services Blazor's own focus interop even in Strict
+    /// mode, so this is the closest thing to observing the caret.
+    /// </summary>
+    private static int FocusCalls(PageHarness page) =>
+        page.JSInterop.Invocations.Count(i => i.Identifier == "Blazor._internal.domWrapper.focus");
+
+    [Fact]
+    public async Task Saving_a_row_that_stayed_put_puts_focus_back_on_its_pencil()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.DrySeasonings);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dry Seasonings");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = FocusCalls(page);
+
+        cut.Find("input.edit-quantity").Input("2 jars");
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        Assert.Equal(afterOpening + 1, FocusCalls(page));
+    }
+
+    [Fact]
+    public async Task Saving_a_move_to_another_group_does_not_chase_the_row_with_focus()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Paprika", "1 jar", IngredientCategory.Other);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Other");
+        cut.Find("button.item-edit").Click();
+        var afterOpening = FocusCalls(page);
+
+        cut.Find("select.form-select-sm").Change(nameof(IngredientCategory.DrySeasonings));
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Equal("true", Header(cut, "Dry Seasonings").GetAttribute("aria-expanded")));
+
+        // FocusAsync scrolls its target into view, and the row has just moved to
+        // a group that may be nowhere near the viewport — so chasing it would
+        // drag the page along behind a save. Focus falls to <body> instead,
+        // which costs the tab order but never moves the scrollbar.
+        Assert.Equal(afterOpening, FocusCalls(page));
+    }
+
+    [Fact]
+    public async Task A_draft_does_not_write_back_a_field_someone_else_changed()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cheddar", "1 block", IngredientCategory.Dairy);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dairy");
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-notes").Input("back of the fridge");
+
+        // Another tab, or the auto-categorizer a few seconds after an add.
+        await page.OutOfCircuitService().SetCategoryAsync("Cheddar", IngredientCategory.Snacks);
+
+        // The row re-renders under its new heading. The dropdown has to follow
+        // it: a row filed under Snacks whose own select reads Dairy is incoherent
+        // before anything is even saved.
+        cut.WaitForAssertion(() =>
+            Assert.Equal(
+                nameof(IngredientCategory.Snacks),
+                cut.Find("select.form-select-sm").GetAttribute("value")));
+
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        var stored = await page.Service.FindAsync("Cheddar");
+        // Saving must not revert a field the user never touched. The note they
+        // did type still has to land.
+        Assert.Equal(IngredientCategory.Snacks, stored!.Category);
+        Assert.Equal("back of the fridge", stored.Notes);
+    }
+
+    [Fact]
+    public async Task A_draft_keeps_the_value_the_user_typed_over_a_live_write()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Cheddar", "1 block", IngredientCategory.Dairy);
+        var cut = page.RenderInventory();
+        Toggle(cut, "Dairy");
+        cut.Find("button.item-edit").Click();
+        cut.Find("input.edit-quantity").Input("half a block");
+
+        await page.OutOfCircuitService().UpsertAsync("Cheddar", "2 blocks", IngredientCategory.Dairy);
+
+        // The other half of the rule: re-syncing untouched fields must never
+        // reach a box the user is in the middle of. Same line the add form's
+        // categoryTouched/quantityTouched draw.
+        cut.WaitForAssertion(() =>
+            Assert.Equal("half a block", cut.Find("input.edit-quantity").GetAttribute("value")));
+
+        cut.Find("button.item-save").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("button.item-save")));
+        Assert.Equal("half a block", (await page.Service.FindAsync("Cheddar"))!.Quantity);
     }
 
     /// <summary>The accordion button for a category, found by its visible label.</summary>
