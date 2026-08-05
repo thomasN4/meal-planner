@@ -4,11 +4,38 @@
    when contrast drops, whatever the reason. The weight is the third signal, and
    aria-pressed is the fourth for anything not looking at pixels.
 
+   But the edge only stays legible if it is coloured for the ground it lands on,
+   and here that ground is the fill, not the page. --bs-link-color is what every
+   other inset bar in this repo uses and it measures 1.04:1 on that grey — the
+   bar was invisible, leaving the weight and aria-pressed doing all the work.
+   --bs-btn-active-color is the colour Bootstrap already paints the label in, so
+   it is legible on --bs-btn-active-bg by construction: 4.69:1, and the same in
+   both themes because btn-outline-secondary carries no dark-theme override.
+   (--bs-body-bg is the near miss — it tracks the page, so it drops to 3.29:1 in
+   dark.) This depends on the button keeping a .btn-outline-* class, which is
+   what defines the variable; without one the declaration is dropped whole and
+   the bar disappears silently.
+
    Inset rather than border-left so the label does not shift by 3px when the
    selection moves. */
 .theme-choice.active {
-    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color);
     font-weight: 600;
+}
+
+/* box-shadow is one property, so the rule above *replaces* the focus ring
+   app.css paints at `.btn:focus` rather than adding to it — and it outranks it
+   (three compound selectors against two), so the current button was the one
+   button in the group with no keyboard focus indicator at all. Its unselected
+   siblings ring normally, which is what makes it look like working code. Both
+   shadows have to be spelled out together; the bar goes first so it stays on
+   top of the fill, then app.css's two stops in their own order. Tracks `:focus`
+   and not `:focus-visible` on purpose — that is what app.css uses, and the
+   selected button should ring exactly when its siblings do. */
+.theme-choice.active:focus {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color),
+                0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
 }
 
 /* The bar belongs to whichever button is current, so the group must not clip

@@ -229,9 +229,11 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
-- **Driving a real browser is a different instrument, with two traps that both
+- **Driving a real browser is a different instrument, with four traps that all
   produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
-  layout, `@onmousedown:preventDefault` — so this comes up.
+  layout, colour, `@onmousedown:preventDefault` — so this comes up. The last two
+  are both "the computed value you read is not the value your CSS specifies";
+  when a number looks impossible, suspect the instrument before the stylesheet.
   - **A programmatic click is not a click.** JS `element.click()` reaches
     Blazor's handlers, so the write lands and the DOM updates and everything
     looks right. It does **not** run the focus path: an editor opened that way
@@ -255,6 +257,32 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     still shifts the whole group". Re-run at a fixed size, the real answer was
     zero rows moved. Compare against a snapshot taken at the same width, and
     treat "everything moved" as a suspected measurement fault first.
+  - **Kill transitions before reading a computed colour.** Bootstrap's `.btn`
+    transitions `background-color` and `box-shadow` over .15s, and a tab that
+    is not the foreground one does not advance them — so `getComputedStyle`
+    hands back the transition's *start* values however long you wait. Measuring
+    `.theme-choice.active` that way reported a transparent background and a
+    zero-width `rgba(0,0,0,0)` shadow on a button that was plainly filled and
+    barred on screen, which reads as "the rule isn't applying" rather than as a
+    stopped clock. The tell is an element that `matches()` the selector while
+    computing none of its declarations; the check is a freshly-created element
+    with the same classes, which has no transition to be caught mid-way.
+    Inject `*{transition:none!important;animation:none!important}`, force a
+    reflow, then measure.
+  - **Dark Reader rewrites what you are trying to measure.** This household
+    browses with it (which is half of why the inset bars exist), so it is
+    routinely on in the browser you are driving. In dynamic mode it remaps every
+    resolved colour: `.role-choice.active`, `.theme-choice.active` and
+    `.pick-chip` all reported the *same* `rgb(24,26,27)` background, in **both**
+    themes, which is the tell — a palette measurement that no longer varies with
+    the palette. Detect it (`html[data-darkreader-mode]`, or
+    `style.darkreader` elements), then strip those style nodes and read
+    **synchronously**: its observer re-injects on a later task, so a single
+    `await` between the strip and the read loses you the window. Verified this
+    way the numbers land exactly on Bootstrap's tokens. Worth knowing that the
+    bars survived the remapper anyway — 17.46:1 for the white ones under Dark
+    Reader — which is the idiom working as intended, not a reason to skip the
+    clean measurement.
 
 ## Conventions & gotchas
 
@@ -423,11 +451,32 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   themes), NavMenu's white-on-navy, and the Blazor error chrome.
 - **The inset bars are not Dark Reader workarounds and do not retire now that
   we ship a palette.** `.name-suggestion.highlighted`, `.row-editing
-  td:first-child` and `.theme-choice.active` each paint one edge because low
+  td:first-child`, `.theme-choice.active`, `.role-choice.active` and
+  `.pick-chip.use-up` each paint one edge because low
   contrast arrives from anywhere — an extension, a washed-out panel, sunlight —
   and none of it can rewrite a painted edge. Never signal state by colour alone;
   Bootstrap's `.active` on an outline button is exactly that and is why
-  `ThemeToggle` overrides it.
+  `ThemeToggle` overrides it. **The bar's colour follows its ground, and the
+  ground is not always the page.** On a `btn-outline-*` that is `.active` a fill
+  is painted over it, where `--bs-link-color` measures **1.04:1** and vanishes —
+  the bar was decorative there for as long as it existed, with `font-weight` and
+  `aria-pressed` carrying the state alone. Those cases use
+  `--bs-btn-active-color`, the colour Bootstrap paints the label in, so it is
+  legible on `--bs-btn-active-bg` by construction: 4.69:1, identical in both
+  themes because Bootstrap 5.3 gives `btn-outline-secondary` no dark-theme
+  override. `--bs-body-bg` is the near miss — 3.29:1 in dark, because it tracks
+  the page rather than the fill. Bars on a pale ground keep `--bs-link-color`
+  (`.pick-chip.use-up` measures 3.80:1); the two diverging is the point, not an
+  inconsistency to tidy away. **A bar on anything focusable must also re-state
+  the focus ring.** `box-shadow` is one property, so an inset bar *replaces*
+  `app.css`'s `.btn:focus` ring rather than adding to it, and a
+  `.x.active[b-…]` selector outranks it — which left the selected button in both
+  toggle groups with no keyboard focus indicator while its unselected siblings
+  ringed normally, the asymmetry that makes it read as working code. The
+  `:focus` rules spell out bar *and* both ring stops together. Only buttons are
+  affected; the chip, the suggestion row and the editing cell are not focusable.
+  This is browser-only — bUnit has no focus model and no layout, so it cannot
+  see a lost ring; it takes a real Tab in a focused window.
 - **Two traps in the theme plumbing**, both in `theme.js`:
   - the script is **blocking, in `<head>`, before the stylesheets**. `defer`,
     end of `<body>`, or a Blazor component that runs when the circuit connects
