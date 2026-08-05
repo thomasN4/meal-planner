@@ -19,10 +19,14 @@ internal sealed class PageHarness : BunitContext
 {
     private readonly InventoryHarness _inventory;
 
-    private PageHarness(InventoryHarness inventory, FakeRecipeGenerator generator)
+    private PageHarness(
+        InventoryHarness inventory,
+        FakeRecipeGenerator generator,
+        FakeReceiptScanner scanner)
     {
         _inventory = inventory;
         Generator = generator;
+        Scanner = scanner;
         Recipes = inventory.NewRecipeService();
 
         // Registered as singletons rather than scoped: a BunitContext resolves
@@ -33,6 +37,8 @@ internal sealed class PageHarness : BunitContext
         Services.AddSingleton(Recipes);
         Services.AddSingleton<IRecipeGenerator>(generator);
         Services.AddSingleton(Options.Create(RecipeOptions));
+        Services.AddSingleton<IReceiptScanner>(scanner);
+        Services.AddSingleton(Options.Create(ScanOptions));
         Services.AddLogging();
     }
 
@@ -49,11 +55,16 @@ internal sealed class PageHarness : BunitContext
 
     public FakeRecipeGenerator Generator { get; }
 
+    public FakeReceiptScanner Scanner { get; }
+
     /// <summary>
     /// Mutable up until the page is rendered, so a test can switch recipe
     /// generation off before <c>Recipes</c> reads it.
     /// </summary>
     public RecipeGenerationOptions RecipeOptions { get; } = new();
+
+    /// <inheritdoc cref="RecipeOptions"/>
+    public ReceiptScanningOptions ScanOptions { get; } = new();
 
     /// <summary>
     /// A second <see cref="InventoryService"/> over the same database and
@@ -66,7 +77,7 @@ internal sealed class PageHarness : BunitContext
     public Task<int> CountAsync() => _inventory.CountAsync();
 
     public static async Task<PageHarness> CreateAsync() =>
-        new(await InventoryHarness.CreateAsync(), new FakeRecipeGenerator());
+        new(await InventoryHarness.CreateAsync(), new FakeRecipeGenerator(), new FakeReceiptScanner());
 
     /// <summary>
     /// Renders the inventory page as the app hosts it.
@@ -126,6 +137,49 @@ internal sealed class FakeRecipeGenerator : IRecipeGenerator
         lock (_requests)
         {
             _requests.Add(request);
+        }
+
+        if (Gate is not null)
+        {
+            await Gate.Task.WaitAsync(ct);
+        }
+
+        return Result;
+    }
+}
+
+/// <summary>
+/// Stands in for <see cref="ClaudeReceiptScanner"/> without a subprocess.
+/// Keeps the real thing's contract, which is the part worth faking: it never
+/// throws, and an empty <see cref="Result"/> is how a failure arrives.
+/// </summary>
+internal sealed class FakeReceiptScanner : IReceiptScanner
+{
+    private readonly List<ReceiptFile> _files = [];
+
+    /// <summary>Set to hold ScanAsync open until the test releases it.</summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public IReadOnlyList<ScannedLine> Result { get; set; } = [];
+
+    public IReadOnlyList<ReceiptFile> Files
+    {
+        get
+        {
+            lock (_files)
+            {
+                return _files.ToArray();
+            }
+        }
+    }
+
+    public async Task<IReadOnlyList<ScannedLine>> ScanAsync(
+        ReceiptFile file,
+        CancellationToken ct = default)
+    {
+        lock (_files)
+        {
+            _files.Add(file);
         }
 
         if (Gate is not null)

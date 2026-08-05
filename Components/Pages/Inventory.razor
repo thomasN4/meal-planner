@@ -3,8 +3,11 @@
 @implements IDisposable
 @using MealPlanner.Models
 @using MealPlanner.Services
+@using Microsoft.Extensions.Options
 @inject InventoryService Svc
 @inject InventoryChangeNotifier Notifier
+@inject IReceiptScanner Scanner
+@inject IOptions<ReceiptScanningOptions> ScanOptions
 @inject ILogger<Inventory> Logger
 
 <PageTitle>Inventory</PageTitle>
@@ -98,6 +101,133 @@
         </div>
     </div>
 </div>
+
+@if (ScanOptions.Value.Enabled)
+{
+    @* Below the add form, never above it: a household member who knows what
+       they want types it, and the whole receipt path is the slower, chunkier
+       one. The ordering is load-bearing for the page's own tests too — several
+       reach for Find("button.btn-primary"), which returns the first match in
+       document order, and that has to keep meaning Add. *@
+    <div class="card mb-4 scan-card">
+        <div class="card-body">
+            @if (scanRows is null)
+            {
+                <div class="d-flex flex-wrap align-items-end gap-3">
+                    <div class="flex-grow-1">
+                        <label class="form-label mb-1" for="scan-file">Fill from a receipt</label>
+                        @* Keyed on a counter so the control is a fresh element
+                           after every scan. A file input fires no change event
+                           when the same file is picked twice, so without this
+                           a re-scan of the photo you just discarded does
+                           nothing at all — which reads as a broken button.
+
+                           accept filters what the picker offers, and is a
+                           convenience for whoever is choosing rather than a
+                           promise to the server — which checks the media type
+                           and the size itself.
+
+                           Deliberately no capture="environment". It reads like
+                           the mobile-friendly choice, and it is the opposite:
+                           it opens the camera *instead of* the picker, so a
+                           receipt photographed an hour ago in the gallery
+                           becomes unreachable. Without it a phone offers both,
+                           camera included. *@
+                        <InputFile @key="scanNonce" id="scan-file" class="form-control scan-file"
+                                   accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+                                   disabled="@scanning"
+                                   OnChange="OnReceiptChosenAsync"/>
+                    </div>
+                    @if (scanning)
+                    {
+                        <button class="btn btn-outline-secondary scan-cancel" @onclick="CancelScan">Cancel</button>
+                    }
+                </div>
+                <p class="scan-help mb-0">
+                    @if (scanning)
+                    {
+                        <span>Reading @scanFileName… this takes a few seconds.</span>
+                    }
+                    else
+                    {
+                        <span>A photo or a PDF. Nothing is written until you have looked at it.</span>
+                    }
+                </p>
+            }
+            else
+            {
+                <div class="d-flex flex-wrap align-items-baseline gap-2 mb-2">
+                    <h2 class="h6 mb-0">@Plural(scanRows.Count, "line") from @scanFileName</h2>
+                    <span class="scan-help ms-auto">@keptCount of @scanRows.Count selected</span>
+                </div>
+                @* A list rather than a table on purpose: the page's one <table>
+                   is the inventory itself, and the tests select inside tbody to
+                   find the row editor. A second tbody full of inputs would make
+                   every one of those selectors ambiguous the moment a receipt
+                   was open. *@
+                <ul class="scan-rows list-unstyled mb-0">
+                    @for (var i = 0; i < scanRows.Count; i++)
+                    {
+                        var row = scanRows[i];
+                        var match = ScanMatch(row);
+                        var position = i + 1;
+                        <li class="scan-row @(row.Keep ? null : "scan-row-dropped")" @key="row">
+                            <input class="form-check-input scan-keep" type="checkbox"
+                                   aria-label="Add @DisplayName(row.Name, position)"
+                                   @bind="row.Keep"/>
+                            @* oninput on both boxes, the same deliberate
+                               per-keystroke round trip the add form makes: the
+                               badge beside them says what this row is about to
+                               do to the kitchen, and a badge that lags a
+                               keystroke behind is worse than none. *@
+                            <input class="form-control form-control-sm scan-name" maxlength="100"
+                                   aria-label="Name for line @position"
+                                   @bind="row.Name" @bind:event="oninput"/>
+                            <input class="form-control form-control-sm scan-quantity" maxlength="50"
+                                   placeholder="e.g. 2 bags"
+                                   aria-label="Quantity for @DisplayName(row.Name, position)"
+                                   @bind="row.Quantity" @bind:event="oninput"/>
+                            <span class="scan-effect">
+                                @if (string.IsNullOrWhiteSpace(row.Name))
+                                {
+                                    <span class="badge text-bg-secondary">No name</span>
+                                }
+                                else if (match is null)
+                                {
+                                    <span class="badge text-bg-success">New</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-warning">Replaces</span>
+                                    <span class="scan-effect-detail">
+                                        @match.Name: @DisplayQuantity(match.Quantity) → @DisplayQuantity(row.Quantity)
+                                    </span>
+                                }
+                            </span>
+                        </li>
+                    }
+                </ul>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                    <button class="btn btn-primary scan-confirm" @onclick="ConfirmScanAsync"
+                            disabled="@(keptCount == 0 || confirming)">
+                        Add @Plural(keptCount, "line")
+                    </button>
+                    <button class="btn btn-outline-secondary scan-discard" @onclick="DiscardScan"
+                            disabled="@confirming">Discard</button>
+                    <span class="scan-help ms-auto">Categories are filled in afterwards.</span>
+                </div>
+            }
+            @if (scanError is not null)
+            {
+                @* role=alert, not a second role=status. The add form above owns
+                   this page's one status region, and a second element answering
+                   to it breaks the page's own tests — the same line the row
+                   editor's error draws. *@
+                <div role="alert" class="alert alert-warning py-2 mt-3 mb-0 scan-error">@scanError</div>
+            }
+        </div>
+    </div>
+}
 
 @if (items is null)
 {
@@ -316,6 +446,36 @@ else
     // the pencil markup duplicated across a conditional.
     private readonly Dictionary<int, ElementReference> pencils = [];
     private int? focusPencilId;
+
+    // Receipt scanning. `scanRows` being non-null is what "a review is open"
+    // means, so there is one place to look and no second flag to disagree with
+    // it. The rows live here rather than in the DOM for the same reason the row
+    // editor's draft does, and it bites harder: confirming writes them one at a
+    // time, and every write publishes, so RefreshAsync and a re-render land
+    // between one row and the next. A name corrected by hand must survive that.
+    private List<ScanRow>? scanRows;
+    private bool scanning;
+    private bool confirming;
+    private string? scanError;
+    private string? scanFileName;
+    private CancellationTokenSource? scanCts;
+    // Bumped after every scan so the <InputFile> is a new element each time —
+    // see the @key on it.
+    private int scanNonce;
+
+    private int keptCount => scanRows?.Count(r => r.Keep && !string.IsNullOrWhiteSpace(r.Name)) ?? 0;
+
+    /// <summary>
+    /// One proposed line, as edited. A class rather than a record so the boxes
+    /// can bind straight to it, and so @key has a stable reference to hold
+    /// while the name in it is being retyped.
+    /// </summary>
+    private sealed class ScanRow
+    {
+        public bool Keep { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Quantity { get; set; } = string.Empty;
+    }
 
     protected override void OnInitialized()
     {
@@ -703,10 +863,220 @@ else
         await Svc.DeleteAsync(id);
     }
 
+    // A receipt was chosen. Reads it into memory and hands it to the scanner;
+    // nothing is written, and nothing touches this machine's disk.
+    private async Task OnReceiptChosenAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        scanError = null;
+        scanRows = null;
+        scanFileName = file.Name;
+
+        if (!ReceiptFile.IsSupportedMediaType(file.ContentType))
+        {
+            // The accept attribute filters the picker; it does not constrain
+            // what arrives. A HEIC from an iPhone is the realistic case, and
+            // saying so beats a schema-shaped failure ten seconds later.
+            scanError = $"Can't read {DisplayFileName(file.ContentType)} files — use a JPEG, PNG or PDF.";
+            scanNonce++;
+            return;
+        }
+
+        if (file.Size > ScanOptions.Value.MaxBytes)
+        {
+            scanError = $"That file is {file.Size / (1024 * 1024)} MB. "
+                + $"The limit is {ScanOptions.Value.MaxBytes / (1024 * 1024)} MB — try a smaller photo.";
+            scanNonce++;
+            return;
+        }
+
+        byte[] content;
+        scanning = true;
+        // Held locally as well as in the field: the checks after each await ask
+        // "was *this* scan cancelled", and the field may by then belong to the
+        // next one.
+        var cts = new CancellationTokenSource();
+        scanCts = cts;
+
+        try
+        {
+            using var buffer = new MemoryStream();
+            // maxAllowedSize must be passed: the default is 512KB, which every
+            // photograph exceeds. The check above is the real limit; this
+            // repeats it because OpenReadStream trusts nothing either.
+            await using (var stream = file.OpenReadStream(ScanOptions.Value.MaxBytes, cts.Token))
+            {
+                await stream.CopyToAsync(buffer, cts.Token);
+            }
+            content = buffer.ToArray();
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancel, or the circuit going away mid-upload.
+            scanning = false;
+            scanNonce++;
+            return;
+        }
+        catch (Exception ex)
+        {
+            // A browser that dropped the upload, or a file that vanished under
+            // it. The scanner never saw this one, so its own logging cannot.
+            Logger.LogWarning(ex, "Could not read the uploaded receipt");
+            scanError = "That file couldn't be read. Try choosing it again.";
+            scanning = false;
+            scanNonce++;
+            return;
+        }
+
+        try
+        {
+            var lines = await Scanner.ScanAsync(
+                new ReceiptFile(content, file.ContentType, file.Name), cts.Token);
+
+            if (cts.IsCancellationRequested)
+            {
+                // Cancel is answered here, not only by the token: a scan that
+                // finished while the click was in flight comes back with real
+                // lines and no exception to catch. Opening a review out of one
+                // the user has just called off is the same bug as ignoring the
+                // button — they asked for nothing to happen.
+            }
+            else if (lines.Count == 0)
+            {
+                // The scanner does not throw — an empty list is the whole of
+                // the failure signal, and the log holds the reason. From here
+                // "nothing came back" and "nothing legible on it" are the same
+                // event, so the message covers both without guessing.
+                scanError = "Nothing readable on that one. Try a flatter photo, "
+                    + "or add the items by hand above.";
+            }
+            else
+            {
+                scanRows = lines
+                    .Select(line => new ScanRow
+                    {
+                        // Non-food arrives unticked rather than dropped: it is
+                        // a guess about someone else's kitchen, and a greyed
+                        // row costs one click to disagree with where a missing
+                        // one leaves no recourse.
+                        Keep = line.IsFood,
+                        Name = line.Name,
+                        Quantity = line.Quantity,
+                    })
+                    .ToList();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancel, or disposal. Nothing to say — the user asked for it.
+        }
+        finally
+        {
+            scanning = false;
+            scanCts?.Dispose();
+            scanCts = null;
+            scanNonce++;
+        }
+    }
+
+    private void CancelScan()
+    {
+        scanCts?.Cancel();
+        // Not scanning = false here: the handler's finally does that, and doing
+        // it twice would let a second file be chosen while the first process is
+        // still being killed.
+    }
+
+    private void DiscardScan()
+    {
+        scanRows = null;
+        scanError = null;
+    }
+
+    // What this row would do to the kitchen if confirmed. Derived on every
+    // render rather than stored with the row, so a name another tab creates
+    // mid-review flips the badge from New to Replaces on its own — the same
+    // reason SyncToName runs from the notifier as well as from the name box.
+    private InventoryItem? ScanMatch(ScanRow row) => IngredientMatcher.ExactMatch(items, row.Name);
+
+    private async Task ConfirmScanAsync()
+    {
+        if (scanRows is null || confirming) return;
+
+        var rows = scanRows
+            .Where(r => r.Keep && !string.IsNullOrWhiteSpace(r.Name))
+            .ToList();
+        if (rows.Count == 0) return;
+
+        confirming = true;
+        var created = 0;
+        var updated = 0;
+
+        try
+        {
+            // Sequentially, and deliberately. Each upsert publishes to every
+            // circuit before it returns, and the auto-categorizer batches what
+            // it hears — a receipt's worth of names arriving one after another
+            // is exactly the burst its window was measured against. Firing them
+            // in parallel would also put a dozen writers on one SQLite file for
+            // no gain: the service's retry exists for household members racing
+            // each other, not for the page racing itself.
+            foreach (var row in rows)
+            {
+                // No category and no notes: null leaves an existing row's
+                // category alone and lands a new one in Other, where the
+                // categorizer picks it up. Passing a guess here would take
+                // classification away from the one service that owns it.
+                var change = await Svc.UpsertAsync(row.Name, row.Quantity);
+                ExpandCategory(change.Category);
+                if (change.Kind == ChangeKind.Created) created++; else updated++;
+            }
+        }
+        catch (Exception ex)
+        {
+            // A write that exhausted its retries. Whatever landed has landed —
+            // the rows are still on screen, so the remainder can be confirmed
+            // again without re-scanning the receipt.
+            Logger.LogWarning(ex, "Could not finish adding a scanned receipt");
+            confirming = false;
+            scanError = $"Stopped after {Plural(created + updated, "line")}. "
+                + "The rest are still listed — try again.";
+            return;
+        }
+
+        confirming = false;
+        scanRows = null;
+        scanError = null;
+        ShowStatus(DescribeScan(created, updated));
+    }
+
+    private static string DescribeScan(int created, int updated) => (created, updated) switch
+    {
+        (0, _) => $"Updated {Plural(updated, "item")} from the receipt",
+        (_, 0) => $"Added {Plural(created, "item")} from the receipt",
+        _ => $"Added {Plural(created, "item")} and updated {updated} from the receipt",
+    };
+
+    private static string Plural(int count, string noun) =>
+        count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    // For an aria-label on a row whose name box may be empty, or may be being
+    // retyped one character at a time.
+    private static string DisplayName(string name, int position) =>
+        string.IsNullOrWhiteSpace(name) ? $"line {position}" : name;
+
+    private static string DisplayFileName(string? contentType) =>
+        string.IsNullOrWhiteSpace(contentType) ? "those" : contentType;
+
     public void Dispose()
     {
         statusCts?.Cancel();
         statusCts?.Dispose();
+        // A scan outlives the click that started it, so a circuit torn down
+        // mid-read would otherwise leave a claude process holding a pipe
+        // nobody is reading.
+        scanCts?.Cancel();
+        scanCts?.Dispose();
         Notifier.Unsubscribe(OnInventoryChangedAsync);
         Logger.LogDebug("Inventory disposed. instance={Instance}", GetHashCode());
     }

@@ -114,6 +114,42 @@ design: it serves a trusted home LAN.
     on the variant returns the wrong button), and the saved list renders outside
     the `Enabled` guard that a test asserts holds no `btn-primary` at all.
     Generate carries its own `generate` class for this reason.
+- **Receipt scanning** — the scan card on `/inventory`. `ClaudeReceiptScanner`
+  (`IReceiptScanner`) reads the grocery lines off a photo or PDF, and the page
+  puts them in a review list; **nothing is written until someone confirms**, and
+  then through `InventoryService.UpsertAsync` like any other write. A receipt is
+  a poor description of a pantry — till abbreviations, carrier bags and
+  batteries, and an `UpsertAsync` that *replaces* a free-text quantity there is
+  no honest way to add to. The review is the feature, not a confirmation step
+  bolted onto it. Nothing about a receipt is persisted and the file never
+  touches disk: bytes go from the upload straight to the subprocess's stdin. See
+  `docs/plans/2026-08-05-receipt-scanning.md`.
+  - **No category travels with a scanned line.** The upsert passes `null`, which
+    lands a new row in `Other` and leaves an existing row's category alone, so
+    `IngredientCategorizer` keeps owning classification. Asking the scanner for
+    a category would take it away from the one service that has the cache and
+    the batching — and it is free there, because a scan's rows arrive together.
+  - **Non-food lines arrive unticked, never dropped.** `isFood` decides a
+    checkbox, not whether the row is shown: it is a guess about someone else's
+    kitchen, and a greyed row costs one click to disagree with where a missing
+    one leaves no recourse.
+  - **The effect badge is derived on every render**, from
+    `IngredientMatcher.ExactMatch` — so a row another tab creates mid-review
+    flips from New to Replaces on its own, the same line `SyncToName` draws. For
+    a match it shows the stocked quantity beside the proposed one, because that
+    badge is the only warning before an overwrite.
+  - **Cancel is answered twice**: by the token, *and* by an
+    `IsCancellationRequested` check after the await. A scan that finished while
+    the click was in flight returns real lines and no exception to catch, and
+    opening a review out of one the user just called off is the same bug as
+    ignoring the button. A page test found this rather than a person.
+  - the review rows live in `@code` fields, never in the DOM (the row editor's
+    rule, sharper here — confirming writes one row at a time and each write
+    publishes, so a re-render lands *between* rows); the card sits **below** the
+    add form, which several tests depend on via `Find("button.btn-primary")`;
+    scan errors use `role="alert"`, never a second `role="status"`; and the
+    `<InputFile>` is `@key`ed on a counter, or picking the same file twice fires
+    no change event and reads as a dead button.
 - **The ingredient combobox is shared** —
   `Components/Shared/IngredientCombobox.razor` (+ its own `.razor.css`) owns the
   *widget*: input, listbox, highlight with its wrap to −1, every aria attribute,
@@ -253,6 +289,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+  - **`UploadFiles` blocks until the handler it triggers has finished**, unlike
+    `Click()`. Any test that parks a scan on a gate and then wants to click
+    something has to upload on its own thread (`Task.Run`) — inline, there is no
+    thread left to click with and the test **hangs rather than fails**, which
+    costs a lot more to diagnose than a red assertion.
+  - **The receipt review is a `<ul>`, not a `<table>`**, and that is a test
+    concern rather than a design one: the page's one `<table>` is the inventory,
+    and several tests select inside `tbody` to find the row editor. A second
+    tbody full of inputs would make every one of those ambiguous the moment a
+    receipt was open.
 - **Driving a real browser is a different instrument, and every trap below
   produces a confident wrong answer.** Plenty here is browser-only — focus,
   scroll, layout, colour, `@onmousedown:preventDefault` — so this comes up. The
@@ -573,6 +619,28 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     from a LAN-facing text box and there is no shell here to quote against.
     (Both names and notes go over **stdin**, not argv, so this guards the flags
     rather than the payload — but the rule stands for anything added later.)
+  - **A picture goes over stdin too** (`ClaudeReceiptScanner`), as a base64
+    `image` or `document` content block, using
+    `--input-format stream-json --output-format stream-json --verbose`. Those
+    three travel as a set — the input format requires the matching output
+    format, which requires `--verbose` — and that combination is what keeps
+    `--tools ""` true for an image. The alternative is writing the upload to a
+    temp directory and handing the model the `Read` tool, i.e. trading the whole
+    no-tools posture for a file the app already has in memory. Measured on both
+    paths: `"tools":["StructuredOutput"]` on the `init` line, nothing else.
+    Three more things measured rather than assumed:
+    - **don't name a schema array `items`.** Named that, the model answered
+      `{"items":{"items":[…]}}` — the schema's own array keyword was in front of
+      it — the answer was rejected and it burned a turn recovering. `products`
+      was right first time. This is a naming rule for every schema here, not a
+      receipt quirk.
+    - **stream-json output means finding the `{"type":"result"}` line**, not the
+      first `{` in the stream the way the other two parsers do. The assistant's
+      own turn comes earlier and can hold the shape the schema *rejected*.
+    - **nothing needs to resize a photograph.** A 3024×4032 JPEG scanned in 8.0s
+      at 2.05 MB and 7.3s at 4.47 MB, one turn each — the CLI does the
+      shrinking. This is what killed a planned browser-side canvas re-encode;
+      `MaxBytes` (5 MB, the API's own per-image limit) is the whole size story.
 - The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
   `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
   built-in query asks for `projectCards`, which the API now rejects. Add
