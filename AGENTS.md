@@ -467,7 +467,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   override. `--bs-body-bg` is the near miss — 3.29:1 in dark, because it tracks
   the page rather than the fill. Bars on a pale ground keep `--bs-link-color`
   (`.pick-chip.use-up` measures 3.80:1); the two diverging is the point, not an
-  inconsistency to tidy away.
+  inconsistency to tidy away. **A bar on anything focusable must also re-state
+  the focus ring.** `box-shadow` is one property, so an inset bar *replaces*
+  `app.css`'s `.btn:focus` ring rather than adding to it, and a
+  `.x.active[b-…]` selector outranks it — which left the selected button in both
+  toggle groups with no keyboard focus indicator while its unselected siblings
+  ringed normally, the asymmetry that makes it read as working code. The
+  `:focus` rules spell out bar *and* both ring stops together. Only buttons are
+  affected; the chip, the suggestion row and the editing cell are not focusable.
+  This is browser-only — bUnit has no focus model and no layout, so it cannot
+  see a lost ring; it takes a real Tab in a focused window.
 - **Two traps in the theme plumbing**, both in `theme.js`:
   - the script is **blocking, in `<head>`, before the stylesheets**. `defer`,
     end of `<body>`, or a Blazor component that runs when the circuit connects

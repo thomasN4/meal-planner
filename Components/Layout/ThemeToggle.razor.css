@@ -23,6 +23,21 @@
     font-weight: 600;
 }
 
+/* box-shadow is one property, so the rule above *replaces* the focus ring
+   app.css paints at `.btn:focus` rather than adding to it — and it outranks it
+   (three compound selectors against two), so the current button was the one
+   button in the group with no keyboard focus indicator at all. Its unselected
+   siblings ring normally, which is what makes it look like working code. Both
+   shadows have to be spelled out together; the bar goes first so it stays on
+   top of the fill, then app.css's two stops in their own order. Tracks `:focus`
+   and not `:focus-visible` on purpose — that is what app.css uses, and the
+   selected button should ring exactly when its siblings do. */
+.theme-choice.active:focus {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color),
+                0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
 /* The bar belongs to whichever button is current, so the group must not clip
    it away at the seams. */
 .theme-choice {

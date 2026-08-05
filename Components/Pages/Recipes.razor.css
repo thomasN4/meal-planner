@@ -15,6 +15,16 @@
     font-weight: 600;
 }
 
+/* Same as ThemeToggle, and for the same reason: box-shadow is one property, so
+   the rule above replaces app.css's `.btn:focus` ring instead of adding to it,
+   and outranks it — leaving the selected role with no keyboard focus indicator
+   while Include and Exclude ring normally. Keep the two in step. */
+.role-choice.active:focus {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color),
+                0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
 /* The bar belongs to whichever button is current, so the group must not clip it
    away at the seams. */
 .role-choice {
