@@ -180,6 +180,20 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   the write races are the point, and neither exists outside real SQLite. The
   schema comes from the committed migrations, stamped from a per-run template
   so tests stay fast.
+- **The harness connects with `Pooling=False`, and nothing may call
+  `SqliteConnection.ClearAllPools()`** (issue #24). It used to do both — pool,
+  then clear on dispose to drop the handle that blocks `File.Delete` on Windows
+  — under a comment reasoning the clear "only discards idle connections, so
+  parallel tests are unaffected". That is false. The clear is **process-wide**
+  and xUnit runs test classes in parallel, so one test's disposal reached into
+  every other test's live connections: a disposed `SQLitePCL.sqlite3` handle
+  mid-statement, or `SQLite Error 5: unable to delete/modify user-function due
+  to active statements` as the pool reset a connection being returned.
+  **The test that failed was never the test at fault** — one victim was a
+  strictly sequential test with its own file and no concurrency of its own —
+  which is why hunting a flaky test found nothing across ~19 runs. Measured
+  3 failures in 30 runs under load, 0 in 30 after. Anything reaching for a
+  process-wide SQLite call from per-test code has this shape; don't.
 - **Write concurrency tests through `InventoryHarness.InParallelAsync`, never
   `Task.WhenAll` over a `Select`.** Microsoft.Data.Sqlite's async methods
   complete synchronously, so the obvious spelling runs each writer to
@@ -189,6 +203,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
 - After touching an `InventoryService` write path, verify the concurrency
   tests still *bite*: break the retry (`attempt == 0` → `attempt < 0`) and
   confirm they go red before you trust them green.
+- **Never pipe a test run through `tail` or `head`.** `dotnet test` prints
+  `Failed <TestName>` immediately *above* the `Failed! - Failed: 1, Passed: …`
+  summary, so a `tail -2` keeps the line saying something broke and drops the
+  only line saying what. That is not hypothetical: it is the whole of issue #24,
+  which cost a reproducible failure its identity and stayed open for it.
+  Redirect the run to a file and grep the file. `scripts/flake-hunt.sh` does
+  exactly that N times over — it keeps the logs of failing runs, deletes the
+  green ones, and prints the name, the assertion and the stack. `-l` re-runs it
+  under a parallel build loop, which is the load the suite is most likely to
+  misbehave under.
 - The suite never spawns the `claude` CLI. `CategorizerTests` runs the real
   service graph against a fake `IIngredientClassifier`; both ends of the
   subprocess that are worth testing are pure functions covered by
