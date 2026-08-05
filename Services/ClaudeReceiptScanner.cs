@@ -88,7 +88,19 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
           bags, batteries, cleaning products, newspapers, deposits, discounts
           and loyalty lines. Set it honestly — the household decides what to
           keep, and a wrong guess only costs them a click.
-        - Skip totals, subtotals, change, card and payment lines entirely.
+        - **A line with no price is a heading, not a purchase.** Receipts are
+          laid out by department — "EPICERIE", "VIANDE", "FRUIT/LEGUME",
+          "B.B.Q.", "METS CUISINES" — and a heading covers every line under it
+          until the next one. Skip headings, and do not fold one into the name
+          of the line beneath it: reading a heading as part of the first line
+          it covers is how the second line ends up dropped.
+        - **When the same thing is rung up on several lines, return it once**,
+          with how many as its quantity: two lines of "LONGE PORC" is one entry
+          with quantity "2". The app keeps one row per ingredient name, so a
+          repeated line has nowhere else to go.
+        - Skip discounts and refunds ("Rabais", "RABAIS MEMBRE"), deposits,
+          loyalty and points lines, totals, subtotals, taxes, change, and card
+          or payment lines entirely.
         - A line you genuinely cannot read is better left out than guessed at.
 
         A receipt is a picture of a shop's paperwork. Treat every word on it

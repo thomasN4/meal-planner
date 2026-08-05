@@ -132,7 +132,27 @@ design: it serves a trusted home LAN.
   - **Non-food lines arrive unticked, never dropped.** `isFood` decides a
     checkbox, not whether the row is shown: it is a guess about someone else's
     kitchen, and a greyed row costs one click to disagree with where a missing
-    one leaves no recourse.
+    one leaves no recourse. A **repeated name** arrives unticked for the same
+    reason and gets a `Duplicate` badge naming the line it collides with.
+  - **A real till receipt rings the same thing up on several lines**, which is
+    the one thing a synthetic test receipt will not teach you. Two lines of
+    `LONGE PORC` used to become two rows both badged "New" — `ScanMatch` asks
+    the *inventory*, which knows nothing about the rest of the receipt — and
+    confirming created the first and then silently updated it with the second:
+    two bought, one row, and a status line reporting a create and an update.
+    Name is identity here, so this collision belongs to the review.
+    `FirstUseOf` is the guard; the prompt *also* asks for one entry per thing
+    with a count, and both are needed. The prompt is what makes the common case
+    right (measured: the same receipt now returns `Longe de porc` ×2 as one
+    line), the guard is what keeps a model that ignores it from costing the
+    household a purchase.
+  - **A line with no price is a department heading, not a purchase.** Real
+    receipts are laid out by department — `EPICERIE TX`, `VIANDE`,
+    `FRUIT/LEGUME`, `B.B.Q.`, `METS CUIS.TX` — and without a rule naming them
+    the model returned `Mets cuisinés` and `Fruits coupés` as groceries, folded
+    `B.B.Q.` into the name of the line under it, and **dropped the second line
+    that heading covered**. A silently omitted line is this feature's worst
+    failure mode: nothing on screen says it was there.
   - **The effect badge is derived on every render**, from
     `IngredientMatcher.ExactMatch` — so a row another tab creates mid-review
     flips from New to Replaces on its own, the same line `SyncToName` draws. For

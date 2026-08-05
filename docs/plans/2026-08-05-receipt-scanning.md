@@ -145,5 +145,39 @@ Two things worth knowing before adding to them:
   a receipt was open.
 
 Guards verified to bite by breaking them: the `Keep` filter on confirm, the
-`Keep = line.IsFood` default, the cancellation check, and the null category.
-Each turned exactly the expected test red.
+`Keep = line.IsFood` default, the cancellation check, the null category, and
+both halves of the duplicate rule. Each turned exactly the expected test red.
+
+## What a real receipt changed (2026-08-05, same day)
+
+The feature above was built against a synthetic receipt — a flat list of priced
+lines. The first real one, a Metro till receipt, was laid out by department and
+rang two things up twice, and it broke three ways:
+
+| Symptom | Cause |
+|---|---|
+| `Mets cuisinés` and `Fruits coupés` proposed as groceries | `METS CUIS.TX` and `FRUITS COUPE` are department headings; the prompt never mentioned headings |
+| `POUTINE REG.` silently missing, and `B.B.Q.` folded into the name above it | the heading was read as part of the first line it covered, and the second line it covered went with it |
+| `Longe de porc` and `Canard catégorie A` each proposed twice, both badged "New" | the badge asks the *inventory*, which knows nothing about the rest of the receipt |
+
+The third is the serious one and was ours, not the model's: confirming created
+the first row and then silently *updated* it with the second, so two pork loins
+bought became one row while the status line reported a create and an update.
+Name is identity here (the NOCASE index), so a collision inside one review is
+the review's to catch.
+
+Fixed on both sides, because either alone is insufficient:
+
+- **the prompt** now names department headings (a line with no price is not a
+  purchase, and a heading covers several lines — don't fold it into the first)
+  and asks for one entry per thing with a count rather than one per line;
+- **`FirstUseOf`** flags any row repeating an earlier row's name, badges it
+  `Duplicate` ahead of Replaces and New, and leaves it unticked. A guard that
+  only holds when the model complies is not a guard.
+
+Re-measured on a faithful replica of that receipt — same departments, same
+repeated lines, same `Rabais` lines: **11 lines, all correct**, with
+`Longe de porc` and `Canard catégorie A` returned once each at quantity 2,
+`Poutine régulière` present, and no heading proposed as food. The 11 rows sum
+to the 15 items the receipt itself counts. Confirmed into the kitchen they
+sorted into Produce, Meat & Seafood, Snacks and Other, quantities intact.

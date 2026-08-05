@@ -262,6 +262,86 @@ public class ReceiptScanTests
     }
 
     [Fact]
+    public async Task A_line_repeating_an_earlier_name_is_flagged_and_arrives_unticked()
+    {
+        // A real till receipt rings the same thing up on several lines — two
+        // pork loins are two lines, not one line saying two. Both rows used to
+        // read "New", and confirming wrote the first and then silently updated
+        // it with the second: two bought, one row in the kitchen.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result =
+        [
+            new ScannedLine("Longe de porc", "", IsFood: true),
+            new ScannedLine("longe de porc", "", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("li.scan-row").Count));
+
+        // The first of the pair keeps its ordinary badge; only the second is
+        // flagged, and case does not save it — the unique index is NOCASE.
+        Assert.Contains("New", Row(cut, 0).QuerySelector("span.scan-effect")!.TextContent,
+            StringComparison.Ordinal);
+        var second = Row(cut, 1).QuerySelector("span.scan-effect")!.TextContent;
+        Assert.Contains("Duplicate", second, StringComparison.Ordinal);
+        Assert.Contains("line 1", second, StringComparison.Ordinal);
+
+        var ticks = cut.FindAll("input.scan-keep");
+        Assert.True(ticks[0].HasAttribute("checked"));
+        Assert.False(ticks[1].HasAttribute("checked"));
+    }
+
+    [Fact]
+    public async Task Confirming_a_flagged_duplicate_leaves_one_row_not_two()
+    {
+        // The default is what protects the household; this is what happens if
+        // they overrule it. One row either way — the point of the badge is that
+        // they are told, not that they are stopped.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result =
+        [
+            new ScannedLine("Longe de porc", "2 pièces", IsFood: true),
+            new ScannedLine("Longe de porc", "", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("li.scan-row").Count));
+        cut.Find("button.scan-confirm").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("li.scan-row")));
+        Assert.Equal(1, await page.CountAsync());
+        // The ticked one, not the flagged one that was left alone.
+        Assert.Equal("2 pièces", (await page.Service.FindAsync("Longe de porc"))!.Quantity);
+    }
+
+    [Fact]
+    public async Task Renaming_a_flagged_duplicate_clears_the_flag()
+    {
+        // The flag is derived on every render, like the Replaces badge beside
+        // it: "Aero moyenne" and "Aero petite" are two real products the model
+        // may hand back under one name, and fixing that by hand has to be
+        // enough.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result =
+        [
+            new ScannedLine("Aero tablette chocolat", "", IsFood: true),
+            new ScannedLine("Aero tablette chocolat", "", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("li.scan-row").Count));
+
+        cut.FindAll("input.scan-name")[1].Input("Aero tablette chocolat petite");
+
+        cut.WaitForAssertion(() => Assert.DoesNotContain(
+            "Duplicate", Row(cut, 1).QuerySelector("span.scan-effect")!.TextContent,
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Discarding_a_review_writes_nothing()
     {
         await using var page = await PageHarness.CreateAsync();

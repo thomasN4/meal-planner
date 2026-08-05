@@ -170,6 +170,7 @@
                     {
                         var row = scanRows[i];
                         var match = ScanMatch(row);
+                        var duplicateOf = FirstUseOf(i);
                         var position = i + 1;
                         <li class="scan-row @(row.Keep ? null : "scan-row-dropped")" @key="row">
                             <input class="form-check-input scan-keep" type="checkbox"
@@ -191,6 +192,18 @@
                                 @if (string.IsNullOrWhiteSpace(row.Name))
                                 {
                                     <span class="badge text-bg-secondary">No name</span>
+                                }
+                                else if (duplicateOf is { } firstLine)
+                                {
+                                    @* Ahead of Replaces and New on purpose: a
+                                       second row of the same name is the more
+                                       surprising fact, and what the inventory
+                                       holds is already being said by the row
+                                       this one collides with. *@
+                                    <span class="badge text-bg-danger">Duplicate</span>
+                                    <span class="scan-effect-detail">
+                                        Same name as line @firstLine — the second would overwrite the first
+                                    </span>
                                 }
                                 else if (match is null)
                                 {
@@ -952,16 +965,28 @@ else
             }
             else
             {
+                // Names already proposed, so a repeated line arrives unticked.
+                // The prompt asks for one entry per thing with a count, but a
+                // guard that only holds when the model complies is not a guard
+                // — and the cost of it not holding is a purchase silently
+                // overwriting its own twin.
+                var proposed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 scanRows = lines
-                    .Select(line => new ScanRow
+                    .Select(line =>
                     {
-                        // Non-food arrives unticked rather than dropped: it is
-                        // a guess about someone else's kitchen, and a greyed
-                        // row costs one click to disagree with where a missing
-                        // one leaves no recourse.
-                        Keep = line.IsFood,
-                        Name = line.Name,
-                        Quantity = line.Quantity,
+                        var first = proposed.Add(line.Name.Trim());
+                        return new ScanRow
+                        {
+                            // Non-food and duplicates both arrive unticked
+                            // rather than dropped: each is a guess about
+                            // someone else's shopping, and a greyed row costs
+                            // one click to disagree with where a missing one
+                            // leaves no recourse.
+                            Keep = line.IsFood && first,
+                            Name = line.Name,
+                            Quantity = line.Quantity,
+                        };
                     })
                     .ToList();
             }
@@ -998,6 +1023,44 @@ else
     // mid-review flips the badge from New to Replaces on its own — the same
     // reason SyncToName runs from the notifier as well as from the name box.
     private InventoryItem? ScanMatch(ScanRow row) => IngredientMatcher.ExactMatch(items, row.Name);
+
+    /// <summary>
+    /// The 1-based position of the first earlier row already holding this row's
+    /// name, or null when this is the first of its name.
+    /// <para>
+    /// The badge beside a row compares it to the <em>inventory</em>, which says
+    /// nothing about the rest of the receipt — and a real till receipt rings the
+    /// same thing up on several lines all the time. Both rows showed "New", and
+    /// confirming wrote the first and then silently updated it with the second:
+    /// two pork loins bought, one row in the kitchen, and a status line
+    /// cheerfully reporting a create and an update. Name is identity here (the
+    /// NOCASE unique index), so this collision is the review's to catch and not
+    /// the database's.
+    /// </para>
+    /// <para>
+    /// Case-insensitive and trimmed, because that is what the index means by
+    /// "the same name". Comparing against earlier rows only, so the row that
+    /// arrived first keeps its ordinary badge and exactly one of the pair is
+    /// flagged.
+    /// </para>
+    /// </summary>
+    private int? FirstUseOf(int index)
+    {
+        if (scanRows is null) return null;
+
+        var name = scanRows[index].Name.Trim();
+        if (name.Length == 0) return null;
+
+        for (var earlier = 0; earlier < index; earlier++)
+        {
+            if (string.Equals(scanRows[earlier].Name.Trim(), name, StringComparison.OrdinalIgnoreCase))
+            {
+                return earlier + 1;
+            }
+        }
+
+        return null;
+    }
 
     private async Task ConfirmScanAsync()
     {
