@@ -214,6 +214,25 @@ public class InventoryPageTests
     }
 
     [Fact]
+    public async Task The_suggestion_option_ids_are_derived_from_the_input_id()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Coriander", "1 bunch", IngredientCategory.FreshHerbs);
+        var cut = page.RenderInventory();
+
+        cut.Find("#new-name").Input("corian");
+
+        // IngredientCombobox builds every id off its own Id parameter rather
+        // than off a constant. That is what lets two of them share a page —
+        // hardcoded ids would put duplicates in the document and aim both
+        // boxes' aria-activedescendant at the same rows. A single-page harness
+        // cannot render the collision, so this asserts the property instead.
+        var option = cut.Find("li[role=option]");
+        Assert.StartsWith("new-name", option.Id, StringComparison.Ordinal);
+        Assert.Equal("new-name-suggestions", cut.Find("ul[role=listbox]").Id);
+    }
+
+    [Fact]
     public async Task Escape_closes_the_suggestion_list()
     {
         await using var page = await PageHarness.CreateAsync();

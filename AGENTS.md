@@ -79,6 +79,61 @@ design: it serves a trusted home LAN.
   `RecipeGeneration` config section's effort `medium` and 180s timeout are
   deliberate divergences from `Categorization`. See
   `docs/plans/2026-07-30-recipe-generation.md`.
+  - **Three roles, and they all mean "every recipe"** (`IngredientRole`). The
+    generator returns 2–3 recipes as **alternative choices for one meal** — the
+    household cooks exactly one — so a constraint honoured in only one of them
+    is a coin flip. Use up = in every recipe *and* finish the stocked amount;
+    Include = in every recipe, any quantity; Exclude = in none. Picks are
+    **inventory-only** and live in one name→role dictionary, so an item can
+    never hold two roles and the old `mustUse.IntersectWith` prune still has
+    one place to happen. Don't loosen "every" to "at least one" without
+    re-reading why. See `docs/plans/2026-08-04-recipe-roles.md`.
+  - **An exclusion is verified the same way "have" is, and no further.**
+    `ParseRecipes` drops a recipe **whole** when an ingredient's claim names an
+    excluded row — stripping the ingredient would leave the steps calling for
+    it. It cannot catch a paraphrase ("petits pois" for "Peas") or a mention in
+    a step's prose: a substring scan false-positives on "peanut"/"peach", and
+    nothing separates a synonym from an unrelated ingredient without another
+    model call. `A_paraphrase_of_an_excluded_row_is_not_caught` asserts the
+    paraphrase *survives* and says it cannot be broken to prove it bites —
+    leave it saying so.
+  - **The brief is deliberate free text**, next to a `MealType` enum that exists
+    to avoid exactly that. Three things make it safe rather than one:
+    `--json-schema` pins the answer's shape, AGENTS.md's measured 500-char
+    adversarial results bound the blast radius *at that length*, and the
+    prompt's data-not-instructions paragraph names it. It clamps in
+    `ClaudeRecipeGenerator`, never at the textarea — `maxlength` is a
+    convenience for the typist, the way `[MaxLength]` is for EF while SQLite
+    ignores it.
+  - **Deleting a saved recipe asks first**, one row armed at a time in an `int?`
+    field, never in the DOM. The glyph is `🗑`, never `✕` — same rule as the
+    inventory row editor. No `window.confirm`: `PageHarness` runs bUnit in
+    Strict JSInterop mode and an unmatched call throws.
+  - **Two selector traps.** The role buttons and the delete-confirm button must
+    not be `btn-primary`: the role group renders *before* Generate (so a `Find`
+    on the variant returns the wrong button), and the saved list renders outside
+    the `Enabled` guard that a test asserts holds no `btn-primary` at all.
+    Generate carries its own `generate` class for this reason.
+- **The ingredient combobox is shared** —
+  `Components/Shared/IngredientCombobox.razor` (+ its own `.razor.css`) owns the
+  *widget*: input, listbox, highlight with its wrap to −1, every aria attribute,
+  `@onmousedown:preventDefault` on both the `<ul>` and each `<li>`, blur
+  dismissal. Each page owns what a match *means* and passes `Suggestions` in.
+  - **Ids derive from the `Id` parameter** (`{Id}-suggestions`,
+    `{Id}-suggestion-{n}`). That is the whole reason two of them can share a
+    page; hardcoding puts duplicate ids in the document and aims both boxes'
+    `aria-activedescendant` at the same rows.
+  - **The exact match is composed in by the caller, not switched on by a flag.**
+    `IngredientMatcher.Suggest` skips it for a reason belonging to *Inventory's*
+    Enter rule; Recipes prepends `ExactMatch` itself, because there an
+    exactly-typed name is the likeliest pick. A `bool includeExactMatch`
+    parameter would encode which page is asking into a pure function.
+  - **The highlight resets on a new `Suggestions` *reference*** (`OnParametersSet`),
+    which works because `Suggest` allocates a fresh list per call. It must not
+    clear `dismissed` there — a pick sets that after the page has already
+    recomputed, and clearing would reopen the list under the name just chosen.
+    A blank `Value` does clear it, and that is what lets a page empty the box
+    and get a fresh list without reaching into the widget.
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
   persists to localStorage. `Components/Layout/ThemeToggle.razor` is a view over
@@ -174,9 +229,13 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
-- **Driving a real browser is a different instrument, with two traps that both
-  produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
-  layout, `@onmousedown:preventDefault` — so this comes up.
+- **Driving a real browser is a different instrument, and every trap below
+  produces a confident wrong answer.** Plenty here is browser-only — focus,
+  scroll, layout, colour, `@onmousedown:preventDefault` — so this comes up. The
+  last two are both "the computed value you read is not the value your CSS
+  specifies"; when a number looks impossible, suspect the instrument before the
+  stylesheet. (Counted in the prose twice, and stale both times, so it no longer
+  is: add a bullet without touching this line.)
   - **A programmatic click is not a click.** JS `element.click()` reaches
     Blazor's handlers, so the write lands and the DOM updates and everything
     looks right. It does **not** run the focus path: an editor opened that way
@@ -184,11 +243,48 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     real click or keypress, or it is asserting nothing — this is precisely how
     you would "confirm" the editor's focus behaviour while it was broken. Use it
     for driving a second tab, not for anything you intend to measure.
+  - **A stale `dotnet run` looks exactly like a broken feature.** A server left
+    running across a rebuild served the new markup while behaving as though
+    `@bind-Value:after` never fired — no suggestions, the Add button stuck
+    disabled, every arrow key dead. A restart fixed it with no code change.
+    Restart before believing an interaction is broken, and before writing down
+    a diagnosis.
+  - **Reading the DOM straight after a keypress races the round trip.** Blazor
+    Server patches over a WebSocket, so `ArrowDown` followed immediately by an
+    `aria-activedescendant` read returns the state from *before* the patch —
+    which reads as "arrow keys do nothing". Put a wait between the key and the
+    read, or you will chase a bug that is not there.
   - **Pin the viewport before measuring geometry.** A window resize partway
     through a run made every row's offsets differ and read as "opening a pencil
     still shifts the whole group". Re-run at a fixed size, the real answer was
     zero rows moved. Compare against a snapshot taken at the same width, and
     treat "everything moved" as a suspected measurement fault first.
+  - **Kill transitions before reading a computed colour.** Bootstrap's `.btn`
+    transitions `background-color` and `box-shadow` over .15s, and a tab that
+    is not the foreground one does not advance them — so `getComputedStyle`
+    hands back the transition's *start* values however long you wait. Measuring
+    `.theme-choice.active` that way reported a transparent background and a
+    zero-width `rgba(0,0,0,0)` shadow on a button that was plainly filled and
+    barred on screen, which reads as "the rule isn't applying" rather than as a
+    stopped clock. The tell is an element that `matches()` the selector while
+    computing none of its declarations; the check is a freshly-created element
+    with the same classes, which has no transition to be caught mid-way.
+    Inject `*{transition:none!important;animation:none!important}`, force a
+    reflow, then measure.
+  - **Dark Reader rewrites what you are trying to measure.** This household
+    browses with it (which is half of why the inset bars exist), so it is
+    routinely on in the browser you are driving. In dynamic mode it remaps every
+    resolved colour: `.role-choice.active`, `.theme-choice.active` and
+    `.pick-chip` all reported the *same* `rgb(24,26,27)` background, in **both**
+    themes, which is the tell — a palette measurement that no longer varies with
+    the palette. Detect it (`html[data-darkreader-mode]`, or
+    `style.darkreader` elements), then strip those style nodes and read
+    **synchronously**: its observer re-injects on a later task, so a single
+    `await` between the strip and the read loses you the window. Verified this
+    way the numbers land exactly on Bootstrap's tokens. Worth knowing that the
+    bars survived the remapper anyway — 17.46:1 for the white ones under Dark
+    Reader — which is the idiom working as intended, not a reason to skip the
+    clean measurement.
 
 ## Conventions & gotchas
 
@@ -357,11 +453,32 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   themes), NavMenu's white-on-navy, and the Blazor error chrome.
 - **The inset bars are not Dark Reader workarounds and do not retire now that
   we ship a palette.** `.name-suggestion.highlighted`, `.row-editing
-  td:first-child` and `.theme-choice.active` each paint one edge because low
+  td:first-child`, `.theme-choice.active`, `.role-choice.active` and
+  `.pick-chip.use-up` each paint one edge because low
   contrast arrives from anywhere — an extension, a washed-out panel, sunlight —
   and none of it can rewrite a painted edge. Never signal state by colour alone;
   Bootstrap's `.active` on an outline button is exactly that and is why
-  `ThemeToggle` overrides it.
+  `ThemeToggle` overrides it. **The bar's colour follows its ground, and the
+  ground is not always the page.** On a `btn-outline-*` that is `.active` a fill
+  is painted over it, where `--bs-link-color` measures **1.04:1** and vanishes —
+  the bar was decorative there for as long as it existed, with `font-weight` and
+  `aria-pressed` carrying the state alone. Those cases use
+  `--bs-btn-active-color`, the colour Bootstrap paints the label in, so it is
+  legible on `--bs-btn-active-bg` by construction: 4.69:1, identical in both
+  themes because Bootstrap 5.3 gives `btn-outline-secondary` no dark-theme
+  override. `--bs-body-bg` is the near miss — 3.29:1 in dark, because it tracks
+  the page rather than the fill. Bars on a pale ground keep `--bs-link-color`
+  (`.pick-chip.use-up` measures 3.80:1); the two diverging is the point, not an
+  inconsistency to tidy away. **A bar on anything focusable must also re-state
+  the focus ring.** `box-shadow` is one property, so an inset bar *replaces*
+  `app.css`'s `.btn:focus` ring rather than adding to it, and a
+  `.x.active[b-…]` selector outranks it — which left the selected button in both
+  toggle groups with no keyboard focus indicator while its unselected siblings
+  ringed normally, the asymmetry that makes it read as working code. The
+  `:focus` rules spell out bar *and* both ring stops together. Only buttons are
+  affected; the chip, the suggestion row and the editing cell are not focusable.
+  This is browser-only — bUnit has no focus model and no layout, so it cannot
+  see a lost ring; it takes a real Tab in a focused window.
 - **Two traps in the theme plumbing**, both in `theme.js`:
   - the script is **blocking, in `<head>`, before the stylesheets**. `defer`,
     end of `<body>`, or a Blazor component that runs when the circuit connects

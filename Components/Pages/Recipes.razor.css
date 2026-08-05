@@ -1,0 +1,89 @@
+/* Bootstrap's .active on an outline button is a fill swap — the current choice
+   signalled by colour and nothing else, which is exactly what ThemeToggle
+   overrides and for the same reason. Copied rather than shared: the two live in
+   different CSS-isolation scopes and there is no stylesheet they both see.
+
+   --bs-btn-active-color, not the --bs-link-color that .pick-chip.use-up uses a
+   few rules down. The bar has to be coloured for the ground it lands on, and
+   the two grounds differ: a chip sits on --bs-secondary-bg, while .active has
+   painted a #6c757d fill over this one. Link colour measures 1.04:1 on that
+   fill and disappears; the label's own colour is legible on it by construction,
+   at 4.69:1 in both themes. The divergence is the point — keep them in step
+   with ThemeToggle, not with the chips. */
+.role-choice.active {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color);
+    font-weight: 600;
+}
+
+/* Same as ThemeToggle, and for the same reason: box-shadow is one property, so
+   the rule above replaces app.css's `.btn:focus` ring instead of adding to it,
+   and outranks it — leaving the selected role with no keyboard focus indicator
+   while Include and Exclude ring normally. Keep the two in step. */
+.role-choice.active:focus {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color),
+                0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
+/* The bar belongs to whichever button is current, so the group must not clip it
+   away at the seams. */
+.role-choice {
+    border-left-width: 1px;
+}
+
+.role-row-label {
+    min-width: 5rem;
+    font-size: 0.875rem;
+    /* The token .text-muted resolves to, not --bs-secondary, which is a fixed
+       grey sitting near 3:1 on a dark ground. */
+    color: var(--bs-secondary-color);
+}
+
+.pick-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 1rem;
+    background-color: var(--bs-secondary-bg);
+    font-size: 0.875rem;
+}
+
+/* Three roles, three shapes. The row label names the role once, at the front,
+   which reads as a heading rather than as a property of each chip — so each
+   chip carries the distinction itself, and carries it in something other than
+   colour. Use up gets the inset bar this repo uses everywhere for "this one";
+   Exclude gets a dashed edge and a struck-through name, which is the one that
+   has to survive greyscale, a red/green deficit and a palette remapper.
+
+   Keeps --bs-link-color where .role-choice.active above does not, and that is
+   not an oversight to tidy up: a chip's ground is --bs-secondary-bg, where the
+   link colour measures 3.80:1 light and 4.76:1 dark. Nothing paints a fill over
+   a chip. */
+.pick-chip.use-up {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+}
+
+.pick-chip.exclude {
+    border-style: dashed;
+}
+
+.pick-chip.exclude .pick-name {
+    text-decoration: line-through;
+}
+
+/* A bare glyph rather than a btn: inside a chip, Bootstrap's button padding
+   makes the chip twice the height of its text. */
+.pick-remove {
+    padding: 0;
+    border: 0;
+    background: none;
+    line-height: 1;
+    color: var(--bs-secondary-color);
+}
+
+.pick-remove:hover,
+.pick-remove:focus-visible {
+    color: var(--bs-body-color);
+}

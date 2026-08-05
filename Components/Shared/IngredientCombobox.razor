@@ -1,0 +1,188 @@
+@using MealPlanner.Models
+
+@* A text box with a suggestion list under it, keyboard-navigable and
+   announced as a combobox. It owns the *widget* — the highlight, the
+   dismissal, the aria wiring — and nothing about what a match means: the
+   page computes `Suggestions` and decides what a pick does. That split is
+   what lets the two callers disagree about exact matches, about what Enter
+   means with nothing highlighted, and about whether the box clears after a
+   pick, without either of them holding a flag for the other's behaviour. *@
+
+@* The wrapper is the positioning anchor for the suggestion list, which would
+   otherwise hang off the card. *@
+<div class="name-combobox">
+    @* value=/@oninput rather than @bind: that is what @bind:event="oninput"
+       compiles to anyway, and spelling it out is what lets the handler run
+       before ValueChanged reaches the parent. The per-keystroke round trip
+       AGENTS.md describes is unchanged — it now drives matching for two
+       pages instead of one. *@
+    <input class="form-control" id="@Id" placeholder="@Placeholder"
+           maxlength="@MaxLength" autocomplete="off"
+           value="@Value" @oninput="OnInputAsync"
+           @onkeydown="OnKeyDownAsync"
+           @onblur="Close"
+           role="combobox" aria-autocomplete="list"
+           aria-expanded="@(IsOpen ? "true" : "false")"
+           aria-controls="@(IsOpen ? ListId : null)"
+           aria-activedescendant="@ActiveOptionId"/>
+    @if (IsOpen)
+    {
+        @* preventDefault on mousedown rather than a timer on blur: it stops
+           the input losing focus at all, so @onblur never fires ahead of the
+           click that picks a row. On the <ul> too, for clicks that land on
+           the padding or the scrollbar. *@
+        <ul class="name-suggestions" id="@ListId" role="listbox"
+            aria-label="Matching ingredients" @onmousedown:preventDefault>
+            @for (var index = 0; index < Suggestions.Count; index++)
+            {
+                var item = Suggestions[index];
+                var isActive = index == highlightedIndex;
+                @* aria-selected is a string for the same reason as the
+                   accordion's aria-expanded: Blazor drops a false bool
+                   attribute. *@
+                <li class="name-suggestion @(isActive ? "highlighted" : null)"
+                    id="@OptionId(index)" role="option"
+                    aria-selected="@(isActive ? "true" : "false")"
+                    @key="item.Id" @onmousedown:preventDefault
+                    @onclick="() => PickAsync(item)">
+                    @if (OptionTemplate is null)
+                    {
+                        <span>@item.Name</span>
+                    }
+                    else
+                    {
+                        @OptionTemplate(item)
+                    }
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The input's DOM id, and the stem every option id is built from. A
+    /// parameter rather than a constant because two comboboxes can share a
+    /// page: hardcoded ids would put duplicate ids in the document and point
+    /// both boxes' aria-activedescendant at the same rows.
+    /// </summary>
+    [Parameter, EditorRequired] public string Id { get; set; } = string.Empty;
+
+    [Parameter] public string Value { get; set; } = string.Empty;
+
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    /// <summary>
+    /// What to offer, best first. Computed by the page, because the two
+    /// callers want different lists from the same matcher — see
+    /// <see cref="IngredientMatcher.Suggest"/> on why an exact match is left
+    /// out for one of them and not the other.
+    /// </summary>
+    [Parameter] public IReadOnlyList<InventoryItem> Suggestions { get; set; } = [];
+
+    /// <summary>Fired for a click or Enter on the highlighted row.</summary>
+    [Parameter] public EventCallback<InventoryItem> OnPick { get; set; }
+
+    /// <summary>
+    /// Enter with nothing arrowed onto. Left unset by callers that have no
+    /// answer for it — an unset <see cref="EventCallback"/> invokes as a
+    /// no-op, so "Enter still adds" stays one page's rule rather than
+    /// becoming a bool that both pages have to read.
+    /// </summary>
+    [Parameter] public EventCallback OnEnterWithoutHighlight { get; set; }
+
+    /// <summary>The body of one option row. Falls back to the plain name.</summary>
+    [Parameter] public RenderFragment<InventoryItem>? OptionTemplate { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    [Parameter] public int MaxLength { get; set; } = 100;
+
+    private int highlightedIndex = -1;   // -1 = nothing highlighted
+    private bool dismissed;              // Escape or blur; typing clears it
+    private IReadOnlyList<InventoryItem>? lastSuggestions;
+
+    private string ListId => $"{Id}-suggestions";
+    private string OptionId(int index) => $"{Id}-suggestion-{index}";
+    private bool IsOpen => Suggestions.Count > 0 && !dismissed;
+    private string? ActiveOptionId => highlightedIndex >= 0 ? OptionId(highlightedIndex) : null;
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(lastSuggestions, Suggestions))
+        {
+            // Every recompute drops the highlight: the list under the box has
+            // just changed, so an index into the old one points at the wrong
+            // row. Deliberately does *not* clear `dismissed` — PickAsync sets
+            // that after the page has already recomputed, and clearing here
+            // would reopen the list under the name the user just chose.
+            lastSuggestions = Suggestions;
+            highlightedIndex = -1;
+        }
+
+        // An empty box has nothing to dismiss, and this is what lets a page
+        // clear the field (after an add, after a pick) and get a fresh list
+        // on the next keystroke without reaching in here to say so.
+        if (string.IsNullOrWhiteSpace(Value))
+        {
+            dismissed = false;
+        }
+    }
+
+    private async Task OnInputAsync(ChangeEventArgs e)
+    {
+        // Typing reopens a list that Escape or a blur closed.
+        dismissed = false;
+        await ValueChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty);
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                MoveHighlight(1);
+                break;
+            case "ArrowUp":
+                MoveHighlight(-1);
+                break;
+            case "Escape":
+                Close();
+                break;
+            case "Enter" when highlightedIndex >= 0 && highlightedIndex < Suggestions.Count:
+                await PickAsync(Suggestions[highlightedIndex]);
+                break;
+            case "Enter":
+                await OnEnterWithoutHighlight.InvokeAsync();
+                break;
+        }
+    }
+
+    // Cycles -1, 0 … n-1 and wraps. -1 stays reachable on purpose: it is how
+    // the user gets back to "Enter does what it did before I arrowed" without
+    // pressing Escape.
+    private void MoveHighlight(int delta)
+    {
+        dismissed = false;
+        if (Suggestions.Count == 0) return;
+
+        var slots = Suggestions.Count + 1;
+        highlightedIndex = (((highlightedIndex + 1 + delta) % slots + slots) % slots) - 1;
+    }
+
+    private void Close()
+    {
+        dismissed = true;
+        highlightedIndex = -1;
+    }
+
+    private async Task PickAsync(InventoryItem item)
+    {
+        // The page decides what a pick does to the text — one fills the box
+        // with the stored name, the other empties it. Closing is the part
+        // that is the same either way, so it is the part that lives here.
+        await OnPick.InvokeAsync(item);
+        dismissed = true;
+        highlightedIndex = -1;
+    }
+}
