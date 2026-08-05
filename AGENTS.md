@@ -229,11 +229,13 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
-- **Driving a real browser is a different instrument, with four traps that all
-  produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
-  layout, colour, `@onmousedown:preventDefault` — so this comes up. The last two
-  are both "the computed value you read is not the value your CSS specifies";
-  when a number looks impossible, suspect the instrument before the stylesheet.
+- **Driving a real browser is a different instrument, and every trap below
+  produces a confident wrong answer.** Plenty here is browser-only — focus,
+  scroll, layout, colour, `@onmousedown:preventDefault` — so this comes up. The
+  last two are both "the computed value you read is not the value your CSS
+  specifies"; when a number looks impossible, suspect the instrument before the
+  stylesheet. (Counted in the prose twice, and stale both times, so it no longer
+  is: add a bullet without touching this line.)
   - **A programmatic click is not a click.** JS `element.click()` reaches
     Blazor's handlers, so the write lands and the DOM updates and everything
     looks right. It does **not** run the focus path: an editor opened that way
