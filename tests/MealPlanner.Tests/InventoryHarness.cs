@@ -1,5 +1,4 @@
 using MealPlanner.Data;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -57,7 +56,7 @@ internal sealed class InventoryHarness : IAsyncDisposable
 
         var provider = new ServiceCollection()
             .AddDbContextFactory<MealPlannerDbContext>(options =>
-                options.UseSqlite($"Data Source={databasePath}"))
+                options.UseSqlite(ConnectionString(databasePath)))
             .BuildServiceProvider();
 
         return new InventoryHarness(
@@ -119,18 +118,44 @@ internal sealed class InventoryHarness : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _provider.DisposeAsync();
-        // Pooled connections keep the file open on Windows, where an open
-        // handle blocks File.Delete. The clear is process-wide, but it only
-        // discards idle connections, so parallel tests are unaffected.
-        SqliteConnection.ClearAllPools();
         Delete(_databasePath);
     }
+
+    /// <summary>
+    /// Pooling off, deliberately (issue #24).
+    ///
+    /// This used to pool and then call <c>SqliteConnection.ClearAllPools()</c>
+    /// on dispose, to drop the handle that blocks File.Delete on Windows, with
+    /// a comment reasoning that the clear "only discards idle connections, so
+    /// parallel tests are unaffected". That was wrong, and wrong in the way
+    /// that is hardest to find: the clear is **process-wide**, xUnit runs test
+    /// classes in parallel, so every harness disposal reached into every other
+    /// test's connections. The damage lands wherever the timing puts it —
+    /// a disposed <c>SQLitePCL.sqlite3</c> handle mid-statement, or
+    /// <c>SQLite Error 5: unable to delete/modify user-function due to active
+    /// statements</c> as the pool tries to reset a connection being returned.
+    ///
+    /// So the test that failed was never the test at fault, which is exactly
+    /// why nineteen clean runs of hunting a flaky test found nothing: a
+    /// strictly sequential test with its own file and no concurrency of its own
+    /// was one of the victims. It also does not reproduce on an idle machine —
+    /// measured 0 failures in 30 idle runs, 3 in 30 under a parallel build, and
+    /// 0 in 30 under that same load once pooling was off.
+    ///
+    /// Not pooling costs a real connection open per DbContext — the suite is
+    /// unchanged at ~13s — and buys back the Windows delete honestly rather
+    /// than tolerating its failure. It changes nothing under test: pooling is
+    /// client-side connection reuse, and SQLite's locking, the NOCASE index and
+    /// the write races all live below it.
+    /// </summary>
+    private static string ConnectionString(string databasePath) =>
+        $"Data Source={databasePath};Pooling=False";
 
     private static async Task<string> CreateTemplateAsync()
     {
         var path = TempDatabasePath();
         var options = new DbContextOptionsBuilder<MealPlannerDbContext>()
-            .UseSqlite($"Data Source={path}")
+            .UseSqlite(ConnectionString(path))
             .Options;
 
         // Migrate rather than EnsureCreated: the committed migrations are what
@@ -139,8 +164,6 @@ internal sealed class InventoryHarness : IAsyncDisposable
         {
             await db.Database.MigrateAsync();
         }
-
-        SqliteConnection.ClearAllPools();
 
         // Nothing owns the template, so tie it to the test run itself rather
         // than leaving one database in the temp directory per invocation.
