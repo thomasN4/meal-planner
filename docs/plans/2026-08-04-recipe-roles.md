@@ -126,14 +126,26 @@ answers before being run down:
   *before* the patch, which reads as "arrow keys don't work". Wait between the
   key and the read.
 
-## Known, not fixed here
+## The inset bar, fixed in both places
 
-`.role-choice.active`'s inset bar sits at **1.04:1** against Bootstrap's
-`btn-outline-secondary` active fill — effectively invisible. It is copied
-faithfully from `ThemeToggle`'s `.theme-choice.active`, which measures the same
-and has since dark mode landed, so this is inherited rather than introduced.
-`font-weight: 600` and `aria-pressed` are what actually carry the state on both.
-Worth fixing in both places at once, not one of them.
+`.role-choice.active`'s bar shipped at **1.04:1** against Bootstrap's
+`btn-outline-secondary` active fill — effectively invisible, leaving
+`font-weight: 600` and `aria-pressed` carrying the state alone. It was copied
+faithfully from `ThemeToggle`'s `.theme-choice.active`, which measured the same
+and had since dark mode landed, so it was inherited rather than introduced here.
+
+Both now use `var(--bs-btn-active-color)` — the colour Bootstrap already paints
+the label in, so it is legible on `--bs-btn-active-bg` by construction: **4.69:1
+in both themes**, from one declaration, because Bootstrap 5.3 ships no
+dark-theme override for `btn-outline-secondary`. `--bs-body-bg` was the near
+miss (3.29:1 in dark — it tracks the page rather than the fill); suppressing the
+`.active` fill instead measured fine but `.btn.active` sets `color` as well as
+`background-color`, so it would have left white text on a white button.
+
+`.pick-chip.use-up` deliberately **keeps** `--bs-link-color`: a chip's ground is
+`--bs-secondary-bg`, where it measures 3.80:1 light and 4.76:1 dark, and nothing
+paints a fill over it. The two bars diverging is the rule, not an inconsistency
+— the bar follows its ground.
 
 ## Out of scope
 

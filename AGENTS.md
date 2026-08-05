@@ -229,9 +229,11 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
-- **Driving a real browser is a different instrument, with three traps that all
+- **Driving a real browser is a different instrument, with four traps that all
   produce confident wrong answers.** Plenty here is browser-only — focus, scroll,
-  layout, colour, `@onmousedown:preventDefault` — so this comes up.
+  layout, colour, `@onmousedown:preventDefault` — so this comes up. The last two
+  are both "the computed value you read is not the value your CSS specifies";
+  when a number looks impossible, suspect the instrument before the stylesheet.
   - **A programmatic click is not a click.** JS `element.click()` reaches
     Blazor's handlers, so the write lands and the DOM updates and everything
     looks right. It does **not** run the focus path: an editor opened that way
@@ -267,6 +269,20 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     with the same classes, which has no transition to be caught mid-way.
     Inject `*{transition:none!important;animation:none!important}`, force a
     reflow, then measure.
+  - **Dark Reader rewrites what you are trying to measure.** This household
+    browses with it (which is half of why the inset bars exist), so it is
+    routinely on in the browser you are driving. In dynamic mode it remaps every
+    resolved colour: `.role-choice.active`, `.theme-choice.active` and
+    `.pick-chip` all reported the *same* `rgb(24,26,27)` background, in **both**
+    themes, which is the tell — a palette measurement that no longer varies with
+    the palette. Detect it (`html[data-darkreader-mode]`, or
+    `style.darkreader` elements), then strip those style nodes and read
+    **synchronously**: its observer re-injects on a later task, so a single
+    `await` between the strip and the read loses you the window. Verified this
+    way the numbers land exactly on Bootstrap's tokens. Worth knowing that the
+    bars survived the remapper anyway — 17.46:1 for the white ones under Dark
+    Reader — which is the idiom working as intended, not a reason to skip the
+    clean measurement.
 
 ## Conventions & gotchas
 
@@ -435,7 +451,8 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   themes), NavMenu's white-on-navy, and the Blazor error chrome.
 - **The inset bars are not Dark Reader workarounds and do not retire now that
   we ship a palette.** `.name-suggestion.highlighted`, `.row-editing
-  td:first-child` and `.theme-choice.active` each paint one edge because low
+  td:first-child`, `.theme-choice.active`, `.role-choice.active` and
+  `.pick-chip.use-up` each paint one edge because low
   contrast arrives from anywhere — an extension, a washed-out panel, sunlight —
   and none of it can rewrite a painted edge. Never signal state by colour alone;
   Bootstrap's `.active` on an outline button is exactly that and is why
