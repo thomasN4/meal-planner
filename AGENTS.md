@@ -157,7 +157,31 @@ design: it serves a trusted home LAN.
     `IngredientMatcher.ExactMatch` — so a row another tab creates mid-review
     flips from New to Replaces on its own, the same line `SyncToName` draws. For
     a match it shows the stocked quantity beside the proposed one, because that
-    badge is the only warning before an overwrite.
+    badge is the only warning before an overwrite. A match whose quantity is
+    already the proposed one badges **No change** instead: `Replaces` /
+    `1 kg → 1 kg` warns about an overwrite that will not happen.
+  - **A confirm has three outcomes, not two.** `UpsertAsync` answers
+    `Unchanged` when the quantity is identical and no category or note moved —
+    exactly this caller's shape, since it passes neither — so
+    `if (Created) created++; else updated++` reported "Updated 1 item" for a
+    write that did nothing, and re-scanning a receipt hits it every time.
+    `DescribeScan` composes one clause per non-zero counter, the shape
+    `InventoryChange.Describe()` was already forced into twice: a branch that
+    has to cover an outcome it never names ends up announcing a different one.
+    Same reason the partial-failure path prunes the rows it wrote from
+    `scanRows` — "the rest are still listed" has to be true, or the retry it
+    invites re-upserts everything and reports the lot as updates.
+  - **What the parser dropped is said on screen.** `ScanAsync` returns a
+    `ScanResult(Lines, Warning)`, and `WarnAbout` turns exactly two of the
+    parser's diagnostics — a receipt truncated at `MaxLines`, and entries with
+    no usable name — into a sentence rendered beside the review. The rest
+    ("no output", "no result line") arrive as an empty `Lines` and keep the
+    page's one failure message; warning as well would put two messages on
+    screen about one event. A silently short review is the same failure the
+    prompt's department-heading rule closes on the model's side, and `MaxLines`
+    reopened it on ours. `MaxLines <= 0` means **no ceiling**: read the other
+    way it is a setting that switches the feature off while looking like a
+    limit, and `Enabled` is the switch.
   - **Cancel is answered twice**: by the token, *and* by an
     `IsCancellationRequested` check after the await. A scan that finished while
     the click was in flight returns real lines and no exception to catch, and
@@ -661,6 +685,13 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
       at 2.05 MB and 7.3s at 4.47 MB, one turn each — the CLI does the
       shrinking. This is what killed a planned browser-side canvas re-encode;
       `MaxBytes` (5 MB, the API's own per-image limit) is the whole size story.
+    And one that is reasoning rather than measurement: **a broken pipe has to
+    kill the child.** `using var process` disposes a handle; it does not kill
+    what the handle points at, so an `IOException` from the stdin write escaping
+    `RunAsync` leaves a `claude` process behind. The scanner catches every
+    exception to `Kill` for that reason, and it matters here more than in
+    `ClaudeIngredientClassifier` — that one writes a few hundred bytes, this one
+    writes megabytes of base64, and the window is the whole of the write.
 - The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
   `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
   built-in query asks for `projectCards`, which the API now rejects. Add

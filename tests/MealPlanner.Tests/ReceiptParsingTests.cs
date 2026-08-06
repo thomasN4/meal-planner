@@ -206,6 +206,54 @@ public class ReceiptParsingTests
     }
 
     [Fact]
+    public void A_cap_of_zero_means_no_cap_rather_than_no_lines()
+    {
+        // Read the other way, a MaxLines of 0 is a setting that switches the
+        // feature off while looking like a limit, and the only sign of it would
+        // be an empty review nobody could account for. Enabled is the switch.
+        var products = string.Join(',', Enumerable.Range(0, 10)
+            .Select(i => $$"""{"name":"Item {{i}}","quantity":"1","isFood":true}"""));
+
+        var lines = ClaudeReceiptScanner.ParseScan(
+            Transcript($$"""{"products":[{{products}}]}"""), maxLines: 0, out var problem);
+
+        Assert.Equal(10, lines.Count);
+        Assert.Null(problem);
+    }
+
+    [Theory]
+    // The two problems that mean "there was more on that receipt than you are
+    // looking at" — the only ones the household can act on.
+    [InlineData("stopped at 60 line(s)", 60, "more lines than fit")]
+    [InlineData("3 unusable line(s)", 12, "3 line(s)")]
+    // Outright failures arrive as an empty list, which the page already has one
+    // sentence for. A warning as well would be two messages about one event.
+    [InlineData("no output", 0, null)]
+    [InlineData("no result line in output", 0, null)]
+    [InlineData("nothing readable on the receipt", 0, null)]
+    [InlineData("no \"products\" array", 0, null)]
+    public void Only_a_partly_lost_receipt_is_worth_warning_about(
+        string problem, int kept, string? expected)
+    {
+        var warning = ClaudeReceiptScanner.WarnAbout(problem, kept);
+
+        if (expected is null)
+        {
+            Assert.Null(warning);
+        }
+        else
+        {
+            Assert.Contains(expected, warning!, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void A_clean_scan_carries_no_warning()
+    {
+        Assert.Null(ClaudeReceiptScanner.WarnAbout(problem: null, kept: 7));
+    }
+
+    [Fact]
     public void An_image_travels_as_an_image_block()
     {
         var payload = ClaudeReceiptScanner.BuildPayload(

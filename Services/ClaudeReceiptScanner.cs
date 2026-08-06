@@ -121,7 +121,7 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
     private const int MaxNameLength = 100;
     private const int MaxQuantityLength = 50;
 
-    public async Task<IReadOnlyList<ScannedLine>> ScanAsync(
+    public async Task<ScanResult> ScanAsync(
         ReceiptFile file,
         CancellationToken ct = default)
     {
@@ -144,7 +144,7 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             _logger.LogInformation(
                 "Read {Count} line(s) from {FileName} ({Bytes} bytes) in {ElapsedMs}ms",
                 lines.Count, file.FileName, file.Content.Length, stopwatch.ElapsedMilliseconds);
-            return lines;
+            return new ScanResult(lines, WarnAbout(problem, lines.Count));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -157,9 +157,38 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             // timeout, an image the model refused. The page shows its error
             // state and the add form still works; nothing else breaks.
             _logger.LogWarning(ex, "Receipt scan failed for {FileName}", file.FileName);
-            return [];
+            return new ScanResult([]);
         }
     }
+
+    /// <summary>
+    /// Turns the parser's diagnostic into something to say to the household, and
+    /// only for the two problems that mean "there was more on that receipt than
+    /// you are looking at".
+    /// <para>
+    /// The rest — no output, no result line, no structured output, nothing
+    /// readable — all arrive as an empty list, which the page already has a
+    /// sentence for. Warning about them too would put two messages on screen
+    /// about one failure.
+    /// </para>
+    /// <para>
+    /// Split out and internal so the mapping is testable without a subprocess,
+    /// the same reason <see cref="BuildPayload"/> and <see cref="ParseScan"/>
+    /// are.
+    /// </para>
+    /// </summary>
+    internal static string? WarnAbout(string? problem, int kept) => problem switch
+    {
+        null => null,
+        _ when kept == 0 => null,
+        _ when problem.StartsWith("stopped at", StringComparison.Ordinal) =>
+            $"That receipt had more lines than fit — the first {kept} are listed. "
+            + "Anything past them will need adding by hand.",
+        _ when problem.EndsWith("unusable line(s)", StringComparison.Ordinal) =>
+            $"{problem[..problem.IndexOf(' ')]} line(s) on that receipt couldn't be read "
+            + "and aren't listed below.",
+        _ => null,
+    };
 
     /// <summary>
     /// The single JSONL line handed to the CLI on stdin: one user message whose
@@ -291,6 +320,18 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             Kill(process);
             throw;
         }
+        catch (Exception)
+        {
+            // Anything else that escapes mid-run — realistically an IOException
+            // from the stdin write when the CLI exited early. `using var
+            // process` disposes the handle, which does not kill the child, so
+            // without this a broken pipe leaves a claude process behind. It
+            // matters more here than in ClaudeIngredientClassifier: that one
+            // writes a few hundred bytes, this one writes megabytes of base64,
+            // and the window is the whole of the write.
+            Kill(process);
+            throw;
+        }
     }
 
     private void Kill(Process process)
@@ -361,7 +402,11 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         var skipped = 0;
         foreach (var product in products.EnumerateArray())
         {
-            if (lines.Count == maxLines)
+            // maxLines <= 0 is "no ceiling", never "keep nothing". Zero read the
+            // other way is a config value that turns the feature off while
+            // looking like a limit, and the only sign of it would be an empty
+            // review nobody could explain.
+            if (maxLines > 0 && lines.Count == maxLines)
             {
                 problem = $"stopped at {maxLines} line(s)";
                 return lines;

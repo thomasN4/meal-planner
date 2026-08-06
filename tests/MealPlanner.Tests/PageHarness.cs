@@ -50,6 +50,9 @@ internal sealed class PageHarness : BunitContext
 
     public InventoryChangeNotifier Notifier => _inventory.Notifier;
 
+    /// <inheritdoc cref="InventoryHarness.DatabasePath"/>
+    public string DatabasePath => _inventory.DatabasePath;
+
     /// <summary>Everything the notifier logged, including its subscriber count.</summary>
     public CapturingLogger<InventoryChangeNotifier> Log => _inventory.Log;
 
@@ -162,6 +165,13 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
 
     public IReadOnlyList<ScannedLine> Result { get; set; } = [];
 
+    /// <summary>
+    /// What the real scanner says when the parser dropped or truncated part of
+    /// the receipt. Separate from <see cref="Result"/> so a test can hold the
+    /// lines it wants and still exercise the warning.
+    /// </summary>
+    public string? Warning { get; set; }
+
     public IReadOnlyList<ReceiptFile> Files
     {
         get
@@ -173,7 +183,7 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
         }
     }
 
-    public async Task<IReadOnlyList<ScannedLine>> ScanAsync(
+    public async Task<ScanResult> ScanAsync(
         ReceiptFile file,
         CancellationToken ct = default)
     {
@@ -187,6 +197,6 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
             await Gate.Task.WaitAsync(ct);
         }
 
-        return Result;
+        return new ScanResult(Result, Warning);
     }
 }

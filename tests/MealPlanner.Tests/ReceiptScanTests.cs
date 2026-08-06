@@ -381,6 +381,151 @@ public class ReceiptScanTests
     }
 
     [Fact]
+    public async Task Confirming_a_line_that_changes_nothing_does_not_report_an_update()
+    {
+        // UpsertAsync answers Unchanged when the quantity is identical and no
+        // category or note moved — which is every scan's call shape. Counted as
+        // an update, re-scanning last week's receipt reported work that did not
+        // happen, in the only feedback a confirm gives.
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Riz basmati", "1 kg", IngredientCategory.Grains);
+        page.Scanner.Result = [new ScannedLine("Riz basmati", "1 kg", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+        cut.Find("button.scan-confirm").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            var status = cut.Find("div[role=status]").TextContent;
+            Assert.Contains("already matched the kitchen", status, StringComparison.Ordinal);
+            Assert.DoesNotContain("Updated", status, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task A_mix_of_outcomes_gets_one_clause_each()
+    {
+        // The composed shape, from the side a single-headline ladder gets wrong:
+        // a create, a real update and a no-op in one confirm.
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Riz basmati", "3 sachets", IngredientCategory.Grains);
+        await page.Service.UpsertAsync("Paprika", "1 pot", IngredientCategory.DrySeasonings);
+        page.Scanner.Result =
+        [
+            new ScannedLine("Riz basmati", "1 kg", IsFood: true),
+            new ScannedLine("Paprika", "1 pot", IsFood: true),
+            new ScannedLine("Coriandre fraîche", "1 botte", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("li.scan-row").Count));
+        cut.Find("button.scan-confirm").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            var status = cut.Find("div[role=status]").TextContent;
+            Assert.Contains("Added 1 item", status, StringComparison.Ordinal);
+            Assert.Contains("updated 1", status, StringComparison.Ordinal);
+            Assert.Contains("1 already up to date", status, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task A_line_that_would_write_nothing_says_so_instead_of_warning()
+    {
+        // "Replaces · 1 kg → 1 kg" warns about an overwrite that is not one. The
+        // badge is the only thing standing between a receipt and a lost
+        // quantity, so it has to be right about doing nothing too.
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Riz basmati", "1 kg", IngredientCategory.Grains);
+        page.Scanner.Result = [new ScannedLine("riz basmati", " 1 kg ", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+        var effect = Row(cut, 0).QuerySelector("span.scan-effect")!.TextContent;
+        Assert.Contains("No change", effect, StringComparison.Ordinal);
+        Assert.DoesNotContain("Replaces", effect, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Lines_the_parser_dropped_are_said_beside_the_review()
+    {
+        // A receipt longer than MaxLines, or entries with no name, leave a review
+        // that is quietly short. Nothing on screen said so, which is this
+        // feature's worst failure mode — the same one the prompt's heading rule
+        // closes one step earlier.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result = TypicalReceipt;
+        page.Scanner.Warning = "2 line(s) on that receipt couldn't be read and aren't listed below.";
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+
+        // Beside the review, not instead of it: the rows are still there.
+        cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("li.scan-row").Count));
+        Assert.Contains("couldn't be read", cut.Find("div.scan-error").TextContent,
+            StringComparison.Ordinal);
+        Assert.Equal("alert", cut.Find("div.scan-error").GetAttribute("role"));
+    }
+
+    [Fact]
+    public async Task A_confirm_that_fails_part_way_lists_only_what_is_left()
+    {
+        // "The rest are still listed" has to be true. Leaving the written rows in
+        // the review makes a second confirm re-upsert them — which, with a
+        // quantity the receipt already applied, is exactly the no-op that used to
+        // report itself as an update.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result =
+        [
+            new ScannedLine("Riz basmati", "1 kg", IsFood: true),
+            new ScannedLine("Coriandre fraîche", "1 botte", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("li.scan-row").Count));
+
+        // Break the store between the two writes, the way the service tests do:
+        // read-only means reads still work and only the write fails, and the
+        // subscriber runs inside the publish the first upsert awaits, so the
+        // second one is guaranteed to meet it.
+        Task BreakTheStore(InventoryChange _)
+        {
+            File.SetAttributes(page.DatabasePath, FileAttributes.ReadOnly);
+            return Task.CompletedTask;
+        }
+
+        page.Notifier.Subscribe(BreakTheStore);
+        try
+        {
+            cut.Find("button.scan-confirm").Click();
+
+            cut.WaitForAssertion(() =>
+                Assert.Contains("Stopped after 1 line", cut.Find("div.scan-error").TextContent,
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            page.Notifier.Unsubscribe(BreakTheStore);
+            File.SetAttributes(page.DatabasePath, FileAttributes.Normal);
+        }
+
+        // The one that landed is gone from the review; the one that did not is
+        // still there to try again with.
+        var rows = cut.FindAll("li.scan-row");
+        Assert.Single(rows);
+        Assert.Equal(
+            "Coriandre fraîche",
+            rows[0].QuerySelector("input.scan-name")!.GetAttribute("value"));
+    }
+
+    [Fact]
     public async Task A_scan_that_finds_nothing_says_so_without_opening_a_review()
     {
         // The scanner never throws — an empty list is the whole failure signal.
@@ -421,6 +566,26 @@ public class ReceiptScanTests
         Upload(cut, bytes: 4096);
 
         cut.WaitForAssertion(() => Assert.NotEmpty(cut.FindAll("div.scan-error")));
+        Assert.Empty(page.Scanner.Files);
+    }
+
+    [Fact]
+    public async Task The_size_message_says_the_size_the_file_actually_is()
+    {
+        // Integer division on both halves rendered "That file is 2 MB. The limit
+        // is 2 MB" for a file over the cap — and just-over is the common
+        // rejection, so that was the message most people would ever see.
+        await using var page = await PageHarness.CreateAsync();
+        page.ScanOptions.MaxBytes = 2 * 1024 * 1024;
+        var cut = page.RenderInventory();
+
+        Upload(cut, bytes: 5 * 1024 * 1024 / 2);
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("2.5 MB", cut.Find("div.scan-error").TextContent,
+                StringComparison.Ordinal));
+        Assert.Contains("limit is 2 MB", cut.Find("div.scan-error").TextContent,
+            StringComparison.Ordinal);
         Assert.Empty(page.Scanner.Files);
     }
 

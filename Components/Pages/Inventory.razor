@@ -209,6 +209,21 @@
                                 {
                                     <span class="badge text-bg-success">New</span>
                                 }
+                                else if (IsNoOp(match, row))
+                                {
+                                    @* A row whose quantity already matches would
+                                       write nothing, and "Replaces · 1 kg → 1 kg"
+                                       warns about an overwrite that is not one.
+                                       Approximate on purpose, exactly as the
+                                       Replaces badge beside it is: the service
+                                       normalizes before it compares, and this is
+                                       derived on every render from whatever the
+                                       kitchen holds right now. *@
+                                    <span class="badge text-bg-secondary">No change</span>
+                                    <span class="scan-effect-detail">
+                                        @match.Name is already @DisplayQuantity(match.Quantity)
+                                    </span>
+                                }
                                 else
                                 {
                                     <span class="badge text-bg-warning">Replaces</span>
@@ -897,13 +912,16 @@ else
 
         if (file.Size > ScanOptions.Value.MaxBytes)
         {
-            scanError = $"That file is {file.Size / (1024 * 1024)} MB. "
-                + $"The limit is {ScanOptions.Value.MaxBytes / (1024 * 1024)} MB — try a smaller photo.";
+            // Not integer division on either half: at 5,767,168 bytes against a
+            // 5 MB cap that rendered "That file is 5 MB. The limit is 5 MB",
+            // which is the message a rejection most often produces — just-over
+            // is the common case, not a wildly oversized file.
+            scanError = $"That file is {file.Size / 1024.0 / 1024.0:0.#} MB. "
+                + $"The limit is {ScanOptions.Value.MaxBytes / 1024.0 / 1024.0:0.#} MB — try a smaller photo.";
             scanNonce++;
             return;
         }
 
-        byte[] content;
         scanning = true;
         // Held locally as well as in the field: the checks after each await ask
         // "was *this* scan cancelled", and the field may by then belong to the
@@ -911,39 +929,43 @@ else
         var cts = new CancellationTokenSource();
         scanCts = cts;
 
+        // One try/finally from the moment the field is set, never two. Split in
+        // two, the read's own catch clauses returned past the finally below —
+        // leaving the token source undisposed and, worse, scanCts non-null while
+        // scanning was false, which is the state everything else here reads as
+        // "a scan is live".
         try
         {
-            using var buffer = new MemoryStream();
-            // maxAllowedSize must be passed: the default is 512KB, which every
-            // photograph exceeds. The check above is the real limit; this
-            // repeats it because OpenReadStream trusts nothing either.
-            await using (var stream = file.OpenReadStream(ScanOptions.Value.MaxBytes, cts.Token))
-            {
-                await stream.CopyToAsync(buffer, cts.Token);
-            }
-            content = buffer.ToArray();
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancel, or the circuit going away mid-upload.
-            scanning = false;
-            scanNonce++;
-            return;
-        }
-        catch (Exception ex)
-        {
-            // A browser that dropped the upload, or a file that vanished under
-            // it. The scanner never saw this one, so its own logging cannot.
-            Logger.LogWarning(ex, "Could not read the uploaded receipt");
-            scanError = "That file couldn't be read. Try choosing it again.";
-            scanning = false;
-            scanNonce++;
-            return;
-        }
+            byte[] content;
 
-        try
-        {
-            var lines = await Scanner.ScanAsync(
+            try
+            {
+                using var buffer = new MemoryStream();
+                // maxAllowedSize must be passed: the default is 512KB, which
+                // every photograph exceeds. The check above is the real limit;
+                // this repeats it because OpenReadStream trusts nothing either.
+                await using (var stream = file.OpenReadStream(ScanOptions.Value.MaxBytes, cts.Token))
+                {
+                    await stream.CopyToAsync(buffer, cts.Token);
+                }
+                content = buffer.ToArray();
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancel, or the circuit going away mid-upload.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // A browser that dropped the upload, or a file that vanished
+                // under it. The scanner never saw this one, so its own logging
+                // cannot.
+                Logger.LogWarning(ex, "Could not read the uploaded receipt");
+                scanError = "That file couldn't be read. Try choosing it again.";
+                return;
+            }
+
+            var result = await Scanner.ScanAsync(
                 new ReceiptFile(content, file.ContentType, file.Name), cts.Token);
 
             if (cts.IsCancellationRequested)
@@ -954,7 +976,7 @@ else
                 // the user has just called off is the same bug as ignoring the
                 // button — they asked for nothing to happen.
             }
-            else if (lines.Count == 0)
+            else if (result.Lines.Count == 0)
             {
                 // The scanner does not throw — an empty list is the whole of
                 // the failure signal, and the log holds the reason. From here
@@ -972,7 +994,7 @@ else
                 // overwriting its own twin.
                 var proposed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                scanRows = lines
+                scanRows = result.Lines
                     .Select(line =>
                     {
                         var first = proposed.Add(line.Name.Trim());
@@ -989,6 +1011,14 @@ else
                         };
                     })
                     .ToList();
+
+                // Beside the review, not instead of it. A receipt longer than
+                // MaxLines, or entries the parser could make nothing of, leave
+                // the household looking at a list that is quietly short — the
+                // same silence the prompt's heading rule exists to prevent one
+                // step earlier. The alert region already renders alongside an
+                // open review, so this needs no second element.
+                scanError = result.Warning;
             }
         }
         catch (OperationCanceledException)
@@ -998,8 +1028,13 @@ else
         finally
         {
             scanning = false;
-            scanCts?.Dispose();
-            scanCts = null;
+            // The local one, and the field only while it is still this scan's —
+            // the same reason the local copy exists at all.
+            cts.Dispose();
+            if (ReferenceEquals(scanCts, cts))
+            {
+                scanCts = null;
+            }
             scanNonce++;
         }
     }
@@ -1023,6 +1058,12 @@ else
     // mid-review flips the badge from New to Replaces on its own — the same
     // reason SyncToName runs from the notifier as well as from the name box.
     private InventoryItem? ScanMatch(ScanRow row) => IngredientMatcher.ExactMatch(items, row.Name);
+
+    // Whether confirming this row would come back Unchanged. Trimmed, because
+    // that is the only normalization InventoryService applies to a quantity that
+    // is inside the length clamp, and the clamp is already on the box.
+    private static bool IsNoOp(InventoryItem match, ScanRow row) =>
+        match.Quantity.Trim() == row.Quantity.Trim();
 
     /// <summary>
     /// The 1-based position of the first earlier row already holding this row's
@@ -1074,6 +1115,11 @@ else
         confirming = true;
         var created = 0;
         var updated = 0;
+        var unchanged = 0;
+        // What has actually landed, so a failure part-way can drop them from the
+        // review. Rows, not names: the name box is editable and this list has to
+        // keep pointing at the same objects the <ul> is keyed on.
+        var written = new List<ScanRow>();
 
         try
         {
@@ -1092,17 +1138,33 @@ else
                 // classification away from the one service that owns it.
                 var change = await Svc.UpsertAsync(row.Name, row.Quantity);
                 ExpandCategory(change.Category);
-                if (change.Kind == ChangeKind.Created) created++; else updated++;
+                written.Add(row);
+                // Three outcomes, not two. UpsertAsync answers Unchanged when
+                // the quantity is identical and no category or note moved —
+                // which is exactly this call's shape, since it passes neither —
+                // so re-confirming a receipt reported "Updated 3 items" for
+                // three writes that changed nothing. Same mistake as
+                // Describe()'s old `when` ladder, one caller over: a branch
+                // that has to cover an outcome it never names ends up
+                // announcing some other one.
+                switch (change.Kind)
+                {
+                    case ChangeKind.Created: created++; break;
+                    case ChangeKind.Updated: updated++; break;
+                    default: unchanged++; break;
+                }
             }
         }
         catch (Exception ex)
         {
-            // A write that exhausted its retries. Whatever landed has landed —
-            // the rows are still on screen, so the remainder can be confirmed
-            // again without re-scanning the receipt.
+            // A write that exhausted its retries. Whatever landed has landed, so
+            // drop those rows from the review: leaving them would make "the rest
+            // are still listed" false, and a second confirm would re-upsert
+            // every row that had already succeeded.
             Logger.LogWarning(ex, "Could not finish adding a scanned receipt");
             confirming = false;
-            scanError = $"Stopped after {Plural(created + updated, "line")}. "
+            scanRows?.RemoveAll(written.Contains);
+            scanError = $"Stopped after {Plural(written.Count, "line")}. "
                 + "The rest are still listed — try again.";
             return;
         }
@@ -1110,15 +1172,33 @@ else
         confirming = false;
         scanRows = null;
         scanError = null;
-        ShowStatus(DescribeScan(created, updated));
+        ShowStatus(DescribeScan(created, updated, unchanged));
     }
 
-    private static string DescribeScan(int created, int updated) => (created, updated) switch
+    /// <summary>
+    /// One clause per outcome that happened, the shape
+    /// <see cref="InventoryChange.Describe"/> settled on and for the same
+    /// reason: a ladder picking a single headline has to render every
+    /// combination it lacks a branch for as some other outcome's non-event,
+    /// which is how "Updated 1 item" came to describe a write that changed
+    /// nothing. A zero is never a clause.
+    /// </summary>
+    private static string DescribeScan(int created, int updated, int unchanged)
     {
-        (0, _) => $"Updated {Plural(updated, "item")} from the receipt",
-        (_, 0) => $"Added {Plural(created, "item")} from the receipt",
-        _ => $"Added {Plural(created, "item")} and updated {updated} from the receipt",
-    };
+        // Nothing moved at all: say that, rather than reporting the count as
+        // work done. It is the honest answer to re-scanning last week's receipt.
+        if (created == 0 && updated == 0)
+        {
+            return $"{Plural(unchanged, "line")} from the receipt already matched the kitchen";
+        }
+
+        var clauses = new List<string>();
+        if (created > 0) clauses.Add($"Added {Plural(created, "item")}");
+        if (updated > 0) clauses.Add(clauses.Count == 0 ? $"Updated {Plural(updated, "item")}" : $"updated {updated}");
+        if (unchanged > 0) clauses.Add($"{unchanged} already up to date");
+
+        return $"{string.Join(", ", clauses)} from the receipt";
+    }
 
     private static string Plural(int count, string noun) =>
         count == 1 ? $"1 {noun}" : $"{count} {noun}s";

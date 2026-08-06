@@ -62,6 +62,13 @@ public sealed class ReceiptScanningOptions
     /// How many lines one receipt may propose. A weekly shop is tens of items;
     /// a number far past that means the model has started inventing, and a
     /// review table nobody can read is worse than a truncated one.
+    /// <para>
+    /// Truncating is not silent: the lines that did not fit are counted into
+    /// <see cref="ScanResult.Warning"/> and said on screen. Zero or less means
+    /// no ceiling rather than "keep nothing" — read the other way it is a
+    /// setting that switches the feature off while looking like a limit, and
+    /// <see cref="Enabled"/> is the switch.
+    /// </para>
     /// </summary>
     public int MaxLines { get; set; } = 60;
 }

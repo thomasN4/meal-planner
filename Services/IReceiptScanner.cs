@@ -56,6 +56,27 @@ public sealed record ReceiptFile(byte[] Content, string MediaType, string FileNa
 public sealed record ScannedLine(string Name, string Quantity, bool IsFood);
 
 /// <summary>
+/// What one scan came back with: the lines to review, and — when some of the
+/// receipt did not survive the parse — a sentence saying so.
+/// <para>
+/// <paramref name="Warning"/> exists because the alternative is this feature's
+/// worst failure mode. A receipt of seventy lines reviewed as sixty, or three
+/// entries dropped for having no name, leaves nothing on screen saying they were
+/// ever there — the same silence the prompt's department-heading rule exists to
+/// prevent on the model's side. It is prose for the household, and only ever
+/// about lines that are <em>missing</em> from <paramref name="Lines"/>.
+/// </para>
+/// <para>
+/// Not to be confused with the parser's <c>problem</c> string, which stays in
+/// the log: that one also names outright failures ("no output", "no result line
+/// in output"), and those arrive here as an empty <paramref name="Lines"/> —
+/// still the whole of the failure signal, still without a warning, because the
+/// page says "nothing readable on that one" for itself.
+/// </para>
+/// </summary>
+public sealed record ScanResult(IReadOnlyList<ScannedLine> Lines, string? Warning = null);
+
+/// <summary>
 /// Reads the grocery lines off a photographed or scanned receipt.
 /// <para>
 /// Implementations must not throw. A failed scan means "nothing to review",
@@ -67,5 +88,5 @@ public sealed record ScannedLine(string Name, string Quantity, bool IsFood);
 /// </summary>
 public interface IReceiptScanner
 {
-    Task<IReadOnlyList<ScannedLine>> ScanAsync(ReceiptFile file, CancellationToken ct = default);
+    Task<ScanResult> ScanAsync(ReceiptFile file, CancellationToken ct = default);
 }
