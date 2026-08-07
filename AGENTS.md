@@ -153,6 +153,23 @@ design: it serves a trusted home LAN.
     `B.B.Q.` into the name of the line under it, and **dropped the second line
     that heading covered**. A silently omitted line is this feature's worst
     failure mode: nothing on screen says it was there.
+    **The rule makes this rarer, not impossible** — measured in a browser on
+    2026-08-06, three scans of one real Metro photo: two clean, and the third
+    returned `Mets cuisinés sous-marins viande` (`METS CUIS.TX` +
+    `SOUS-MARINS VIAN`) and `Fruits coupés melon tranchés` (`FRUITS COUPE` +
+    `MELON TRANCHES`). Don't write "the heading hole is closed" anywhere; the
+    review is what catches the residue, which is the argument for the review.
+  - **The model's names are not stable between scans of one photograph**, and
+    that is what `ScanMatch` and `FirstUseOf` both key on. The same Metro photo
+    produced `Mars Twix Chocolat`, then `Chocolat Mars/Twix`, then
+    `Chocolat Mars Twix`; `Canard catégorie A` came back as `Canard cat A`.
+    Each variant is a new name, so the badge says New, the duplicate guard sees
+    nothing, and a re-scan quietly stocks the kitchen twice. Quantities drift
+    the same way (four chocolates read `1` each on one pass and blank on the
+    next). Nothing in this app fixes that — name is identity here, and only a
+    person looking at the review can say two spellings are one thing. Assume it
+    when reasoning about "confirming twice is safe": it is safe for the names
+    that came back identical, and only those.
   - **The effect badge is derived on every render**, from
     `IngredientMatcher.ExactMatch` — so a row another tab creates mid-review
     flips from New to Replaces on its own, the same line `SyncToName` draws. For
