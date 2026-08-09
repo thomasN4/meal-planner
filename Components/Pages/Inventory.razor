@@ -447,7 +447,16 @@ else
     private string? statusMessage;
     private bool statusIsError;
     private CancellationTokenSource? statusCts;
-    private static readonly TimeSpan StatusDuration = TimeSpan.FromSeconds(3);
+
+    // How long the status line stays up follows the message: a flat three
+    // seconds was long enough for the add form's one-liners and lost a scan's
+    // multi-clause summary entirely — a status sentence made *true* (the
+    // Unchanged fix) and then cleared before anyone reads it is only half
+    // fixed. ~15 chars/s is an unhurried reading pace; the floor keeps short
+    // lines from feeling blinky, the ceiling keeps any message from looking
+    // stuck.
+    private static TimeSpan StatusDurationFor(string message) =>
+        TimeSpan.FromSeconds(Math.Clamp(2 + message.Length / 15.0, 4.0, 12.0));
     // Categories start collapsed; only ones the user opens stay open across
     // live refreshes (MCP / other circuits). HashSet so toggle is O(1).
     private readonly HashSet<IngredientCategory> expandedCategories = [];
@@ -729,14 +738,14 @@ else
         // fire-and-forget because it loses the re-render and swallows
         // exceptions; both are handled explicitly in the method below, and the
         // timer has to outlive the handler or the add form freezes again.
-        _ = DismissStatusAsync(statusCts.Token);
+        _ = DismissStatusAsync(StatusDurationFor(message), statusCts.Token);
     }
 
-    private async Task DismissStatusAsync(CancellationToken token)
+    private async Task DismissStatusAsync(TimeSpan duration, CancellationToken token)
     {
         try
         {
-            await Task.Delay(StatusDuration, token);
+            await Task.Delay(duration, token);
             statusMessage = null;
             // Nothing else is rendering by now — the handler that showed the
             // message finished long ago — so ask for the pass ourselves.
