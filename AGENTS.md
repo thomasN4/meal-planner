@@ -165,7 +165,14 @@ design: it serves a trusted home LAN.
     prompt routes headings there instead of into `name`, and the review shows
     it muted beside the row — so leftover glue sits next to its own double,
     visible instead of silent. `ScannedLine.Department` is display-only and
-    never persisted.
+    never persisted. Measured 2026-08-08, three scans of the same Metro photo
+    with the field in place: every line carried a department, no scan welded
+    two covered lines together, and nothing was dropped — the failure changed
+    shape rather than vanishing. Scan 2 returned `Mets cuisinés` as its own
+    row (department: itself, an obvious tell one click unticks); scan 3
+    suffixed a heading into `Quart de cuisse de poulet BBQ` while the
+    department column said `Viande` beside it. The residue is now visible in
+    the review, which is the claim — not that it is gone.
   - **The model's names are not stable between scans of one photograph**, and
     that is what `ScanMatch` and `FirstUseOf` both key on. The same Metro photo
     produced `Mars Twix Chocolat`, then `Chocolat Mars/Twix`, then
