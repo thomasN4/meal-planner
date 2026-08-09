@@ -309,4 +309,50 @@ public class ReceiptParsingTests
     [InlineData(null, false)]
     public void Only_what_the_model_can_read_is_accepted(string? mediaType, bool supported) =>
         Assert.Equal(supported, ReceiptFile.IsSupportedMediaType(mediaType));
+
+    // The department field (issue #31). A heading with nowhere to go gets
+    // welded into the next line's name; the schema now gives it a slot, and
+    // these pin the parser's half: rides beside the name, tolerated when
+    // absent, clamped like everything a person will read.
+
+    [Fact]
+    public void A_department_rides_beside_the_name_not_inside_it()
+    {
+        var lines = Parse(
+            Transcript(
+                """{"products":[{"name":"Longe de porc","quantity":"2","isFood":true,"department":"Viande"}]}"""),
+            out var problem);
+
+        Assert.Null(problem);
+        Assert.Equal("Longe de porc", lines[0].Name);
+        Assert.Equal("Viande", lines[0].Department);
+    }
+
+    [Fact]
+    public void A_missing_or_blank_department_reads_as_none()
+    {
+        // The schema requires the field, but a schema is an ask and the parser
+        // is the trust boundary: a model that omits it must not cost the
+        // household the line.
+        var lines = Parse(
+            Transcript(
+                """{"products":[{"name":"Riz basmati","quantity":"1 kg","isFood":true},{"name":"Lait","quantity":"","isFood":true,"department":""}]}"""),
+            out var problem);
+
+        Assert.Null(problem);
+        Assert.Null(lines[0].Department);
+        Assert.Null(lines[1].Department);
+    }
+
+    [Fact]
+    public void A_department_is_clamped_like_a_name()
+    {
+        var oversized = new string('d', 300);
+        var lines = Parse(
+            Transcript(
+                $$"""{"products":[{"name":"Riz","quantity":"","isFood":true,"department":"{{oversized}}"}]}"""),
+            out _);
+
+        Assert.Equal(100, lines[0].Department!.Length);
+    }
 }

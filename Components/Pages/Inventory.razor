@@ -176,6 +176,12 @@
                             <input class="form-check-input scan-keep" type="checkbox"
                                    aria-label="Add @DisplayName(row.Name, position)"
                                    @bind="row.Keep"/>
+                            @* The department the receipt filed this line under
+                               — context beside the row, so a heading the model
+                               welded into a name anyway has its double sitting
+                               right there to be seen. Always rendered, or the
+                               name boxes stop lining up between rows. *@
+                            <span class="scan-department" title="@row.Department">@row.Department</span>
                             @* oninput on both boxes, the same deliberate
                                per-keystroke round trip the add form makes: the
                                badge beside them says what this row is about to
@@ -534,6 +540,10 @@ else
         public bool Keep { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Quantity { get; set; } = string.Empty;
+        // Context, not data — the receipt's department heading, shown muted
+        // beside the row and written nowhere. Not editable: corrections belong
+        // in the name box.
+        public string? Department { get; init; }
     }
 
     protected override void OnInitialized()
@@ -1056,6 +1066,7 @@ else
                                 && IngredientMatcher.NearMatch(items, line.Name) is null,
                             Name = line.Name,
                             Quantity = line.Quantity,
+                            Department = line.Department,
                         };
                     })
                     .ToList();

@@ -159,6 +159,13 @@ design: it serves a trusted home LAN.
     `SOUS-MARINS VIAN`) and `Fruits coupés melon tranchés` (`FRUITS COUPE` +
     `MELON TRANCHES`). Don't write "the heading hole is closed" anywhere; the
     review is what catches the residue, which is the argument for the review.
+    Since issue #31 the schema also gives every line a **`department` field**
+    (required, `""` for none — a slot the model must fill is harder to ignore
+    than an instruction to skip, though the parser tolerates its absence), the
+    prompt routes headings there instead of into `name`, and the review shows
+    it muted beside the row — so leftover glue sits next to its own double,
+    visible instead of silent. `ScannedLine.Department` is display-only and
+    never persisted.
   - **The model's names are not stable between scans of one photograph**, and
     that is what `ScanMatch` and `FirstUseOf` both key on. The same Metro photo
     produced `Mars Twix Chocolat`, then `Chocolat Mars/Twix`, then

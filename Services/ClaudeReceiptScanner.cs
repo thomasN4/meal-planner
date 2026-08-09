@@ -59,8 +59,15 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
                         name = new { type = "string" },
                         quantity = new { type = "string" },
                         isFood = new { type = "boolean" },
+                        department = new { type = "string" },
                     },
-                    required = new[] { "name", "quantity", "isFood" },
+                    // department is required on purpose (empty string = none):
+                    // the field exists to give a heading somewhere to go that
+                    // is not the next line's name (issue #31), and a slot the
+                    // model must fill on every line is harder to ignore than
+                    // an optional one. The parser still tolerates its absence
+                    // — a schema is an ask, the parser is the trust boundary.
+                    required = new[] { "name", "quantity", "isFood", "department" },
                     additionalProperties = false,
                 },
             },
@@ -88,12 +95,17 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
           bags, batteries, cleaning products, newspapers, deposits, discounts
           and loyalty lines. Set it honestly — the household decides what to
           keep, and a wrong guess only costs them a click.
-        - **A line with no price is a heading, not a purchase.** Receipts are
-          laid out by department — "EPICERIE", "VIANDE", "FRUIT/LEGUME",
-          "B.B.Q.", "METS CUISINES" — and a heading covers every line under it
-          until the next one. Skip headings, and do not fold one into the name
-          of the line beneath it: reading a heading as part of the first line
-          it covers is how the second line ends up dropped.
+        - "department" is the department heading the line sits under, if the
+          receipt shows one, expanded the same way names are: "Viande",
+          "Fruits et légumes". An empty string when there is none or you
+          cannot tell.
+        - **A line with no price is a department heading, not a purchase.**
+          Receipts are laid out by department — "EPICERIE", "VIANDE",
+          "FRUIT/LEGUME", "B.B.Q.", "METS CUISINES" — and a heading covers
+          every line under it until the next one. A heading is never its own
+          entry: report it in each covered entry's "department" field. The
+          "name" never contains the department — reading a heading as part of
+          the first line it covers is how the second line ends up dropped.
         - **When the same thing is rung up on several lines, return it once**,
           with how many as its quantity: two lines of "LONGE PORC" is one entry
           with quantity "2". The app keeps one row per ingredient name, so a
@@ -435,7 +447,16 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             var isFood = !product.TryGetProperty("isFood", out var isFoodElement)
                 || isFoodElement.ValueKind != JsonValueKind.False;
 
-            lines.Add(new ScannedLine(name, quantity, isFood));
+            // Display-only context for the review; clamped for the same
+            // table-legibility reason names are. Missing or malformed is
+            // "none", never a parse failure — the schema asks, this tolerates.
+            var department = product.TryGetProperty("department", out var departmentElement)
+                && departmentElement.ValueKind == JsonValueKind.String
+                    ? Clamp(departmentElement.GetString(), MaxNameLength)
+                    : string.Empty;
+
+            lines.Add(new ScannedLine(name, quantity, isFood,
+                department.Length == 0 ? null : department));
         }
 
         problem = (skipped, lines.Count) switch

@@ -742,4 +742,26 @@ public class ReceiptScanTests
         Assert.Empty(cut.FindAll("button.scan-adopt"));
         Assert.True(row.QuerySelector("input.scan-keep")!.HasAttribute("checked"));
     }
+
+    [Fact]
+    public async Task The_department_a_line_sat_under_is_shown_muted_beside_it()
+    {
+        // Context for the reviewer (issue #31): when the model welds a heading
+        // into a name anyway, the heading's double sits right beside the row,
+        // which is what makes the residue visible instead of silent.
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result =
+        [
+            new ScannedLine("Longe de porc", "2", IsFood: true, Department: "Viande"),
+            new ScannedLine("Riz basmati", "1 kg", IsFood: true),
+        ];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("li.scan-row").Count));
+
+        Assert.Equal("Viande", Row(cut, 0).QuerySelector("span.scan-department")!.TextContent.Trim());
+        // Rendered empty rather than absent, so the name boxes line up.
+        Assert.Equal("", Row(cut, 1).QuerySelector("span.scan-department")!.TextContent.Trim());
+    }
 }

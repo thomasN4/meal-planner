@@ -52,8 +52,15 @@ public sealed record ReceiptFile(byte[] Content, string MediaType, string FileNa
 /// <see cref="InventoryService"/> normalizes and clamps it like any other
 /// input when — and only when — someone confirms the row.
 /// </para>
+/// <para>
+/// <paramref name="Department"/> is the receipt's department heading the line
+/// sat under, or <c>null</c>. Display-only context, never persisted: the field
+/// exists so a heading has somewhere to be that is not the next line's name
+/// (issue #31), and so the review can show the residue when the model welds
+/// one in anyway.
+/// </para>
 /// </summary>
-public sealed record ScannedLine(string Name, string Quantity, bool IsFood);
+public sealed record ScannedLine(string Name, string Quantity, bool IsFood, string? Department = null);
 
 /// <summary>
 /// What one scan came back with: the lines to review, and — when some of the
