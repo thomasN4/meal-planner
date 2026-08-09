@@ -642,4 +642,104 @@ public class ReceiptScanTests
         // The add form is untouched by the flag — it is the fallback.
         Assert.NotEmpty(cut.FindAll("#new-name"));
     }
+
+    // The near-match badge (issue #30). The model's names are not stable
+    // between scans of one photograph — "Canard catégorie A" comes back as
+    // "Canard cat A" — and each variant badged New and stocked the kitchen
+    // twice. Only a person can say two spellings are one thing; these prove
+    // the review asks them.
+
+    private static int FocusCalls(PageHarness page) =>
+        page.JSInterop.Invocations.Count(i => i.Identifier == "Blazor._internal.domWrapper.focus");
+
+    [Fact]
+    public async Task A_name_close_to_a_stocked_row_offers_the_stocked_spelling()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Canard catégorie A", "1", IngredientCategory.MeatAndSeafood);
+        page.Scanner.Result = [new ScannedLine("Canard cat A", "1", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+
+        var row = Row(cut, 0);
+        Assert.Contains("Looks like", row.TextContent, StringComparison.Ordinal);
+        Assert.Contains("Canard catégorie A", row.TextContent, StringComparison.Ordinal);
+        Assert.NotNull(row.QuerySelector("button.scan-adopt"));
+        // Unticked, the Duplicate rationale pointed at the inventory:
+        // confirming as-is is the failure mode this badge exists to stop.
+        Assert.False(row.QuerySelector("input.scan-keep")!.HasAttribute("checked"));
+        // An offer, not a write: the kitchen still holds one row, unchanged.
+        Assert.Equal(1, await page.CountAsync());
+    }
+
+    [Fact]
+    public async Task Adopting_the_stocked_spelling_rewrites_the_name_and_ticks_the_row()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Canard catégorie A", "1", IngredientCategory.MeatAndSeafood);
+        page.Scanner.Result = [new ScannedLine("Canard cat A", "2", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+        var before = FocusCalls(page);
+
+        cut.Find("button.scan-adopt").Click();
+
+        var row = Row(cut, 0);
+        Assert.Equal("Canard catégorie A", row.QuerySelector("input.scan-name")!.GetAttribute("value"));
+        Assert.True(row.QuerySelector("input.scan-keep")!.HasAttribute("checked"));
+        // The badge re-derives: an exact match now, so the offer is gone and
+        // the row says what confirming will actually do.
+        Assert.Empty(cut.FindAll("button.scan-adopt"));
+        Assert.Contains("Replaces", row.TextContent, StringComparison.Ordinal);
+        // Counted, not merely present: the adopt click removes the button that
+        // had focus, and the name box is where the correction lands. A bare
+        // Contains would pass on renders that focused nothing new. Waited on,
+        // because the call lives in OnAfterRenderAsync rather than the handler.
+        cut.WaitForAssertion(() => Assert.Equal(before + 1, FocusCalls(page)));
+    }
+
+    [Fact]
+    public async Task Confirming_an_adopted_line_updates_the_stocked_row_rather_than_creating()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Canard catégorie A", "1", IngredientCategory.MeatAndSeafood);
+        page.Scanner.Result = [new ScannedLine("Canard cat A", "2", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+        cut.Find("button.scan-adopt").Click();
+        cut.Find("button.scan-confirm").Click();
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("li.scan-row")));
+        // One row, updated — not the second row issue #30 is about.
+        Assert.Equal(1, await page.CountAsync());
+        Assert.Equal("2", (await page.Service.FindAsync("Canard catégorie A"))!.Quantity);
+        Assert.Contains("Updated 1 item",
+            cut.Find("div[role=status]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_genuinely_new_name_still_badges_New()
+    {
+        // The conservative side of the matcher: "Riz" alone must not claim
+        // "Riz basmati", and a new item must not arrive unticked just because
+        // the kitchen holds something vaguely alike.
+        await using var page = await PageHarness.CreateAsync();
+        await page.Service.UpsertAsync("Riz basmati", "1 kg", IngredientCategory.Grains);
+        page.Scanner.Result = [new ScannedLine("Riz", "2 kg", IsFood: true)];
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("li.scan-row")));
+
+        var row = Row(cut, 0);
+        Assert.Contains("New", row.TextContent, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("button.scan-adopt"));
+        Assert.True(row.QuerySelector("input.scan-keep")!.HasAttribute("checked"));
+    }
 }

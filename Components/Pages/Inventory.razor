@@ -183,6 +183,7 @@
                                keystroke behind is worse than none. *@
                             <input class="form-control form-control-sm scan-name" maxlength="100"
                                    aria-label="Name for line @position"
+                                   @ref="scanNameRefs[row]"
                                    @bind="row.Name" @bind:event="oninput"/>
                             <input class="form-control form-control-sm scan-quantity" maxlength="50"
                                    placeholder="e.g. 2 bags"
@@ -207,7 +208,27 @@
                                 }
                                 else if (match is null)
                                 {
-                                    <span class="badge text-bg-success">New</span>
+                                    @* The model's names are not stable between
+                                       scans of one photograph, so "no exact
+                                       match" splits in two: a name that merely
+                                       *spells* a stocked row differently, and a
+                                       genuinely new one. Only a person can say
+                                       which, so the near match is an offer with
+                                       a button, never an automatic rewrite. *@
+                                    if (ScanNearMatch(row) is { } near)
+                                    {
+                                        <span class="badge text-bg-info">Looks like</span>
+                                        <span class="scan-effect-detail">
+                                            @near.Name is stocked —
+                                            <button type="button" class="btn btn-link btn-sm p-0 scan-adopt"
+                                                    aria-label="Use the stocked name @near.Name for line @position"
+                                                    @onclick="() => AdoptStockedName(row, near)">use that name</button>
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-success">New</span>
+                                    }
                                 }
                                 else if (IsNoOp(match, row))
                                 {
@@ -490,6 +511,16 @@ else
     // Bumped after every scan so the <InputFile> is a new element each time —
     // see the @key on it.
     private int scanNonce;
+    // One capture per review row's name box — the pencils trick one card down:
+    // @ref takes any assignable expression, an indexer included. Blazor never
+    // clears a capture when its element goes and circuits are long-lived, so
+    // every site that closes or prunes the review clears this too.
+    private readonly Dictionary<ScanRow, ElementReference> scanNameRefs = [];
+    // The review row whose name box takes focus on the next render. Adopting a
+    // stocked spelling removes the very button that was clicked, so without
+    // this focus falls to <body> — the row editor's Escape-did-nothing bug,
+    // one card down.
+    private ScanRow? focusScanName;
 
     private int keptCount => scanRows?.Count(r => r.Keep && !string.IsNullOrWhiteSpace(r.Name)) ?? 0;
 
@@ -766,6 +797,14 @@ else
             return pencils.TryGetValue(id, out var pencil) ? pencil : null;
         }
 
+        if (focusScanName is { } adopted)
+        {
+            focusScanName = null;
+            // The row can be gone — the review pruned or closed between the
+            // click and this render — in which case there is nothing to focus.
+            return scanNameRefs.TryGetValue(adopted, out var nameBox) ? nameBox : null;
+        }
+
         return null;
     }
 
@@ -898,6 +937,8 @@ else
         var file = e.File;
         scanError = null;
         scanRows = null;
+        scanNameRefs.Clear();
+        focusScanName = null;
         scanFileName = file.Name;
 
         if (!ReceiptFile.IsSupportedMediaType(file.ContentType))
@@ -1000,12 +1041,19 @@ else
                         var first = proposed.Add(line.Name.Trim());
                         return new ScanRow
                         {
-                            // Non-food and duplicates both arrive unticked
-                            // rather than dropped: each is a guess about
-                            // someone else's shopping, and a greyed row costs
-                            // one click to disagree with where a missing one
-                            // leaves no recourse.
-                            Keep = line.IsFood && first,
+                            // Non-food, duplicates and near matches of a
+                            // stocked row all arrive unticked rather than
+                            // dropped: each is a guess about someone else's
+                            // shopping, and a greyed row costs one click to
+                            // disagree with where a missing one leaves no
+                            // recourse. The near-match untick is the Duplicate
+                            // rationale pointed at the inventory instead of
+                            // the receipt — confirming "Canard cat A" as-is
+                            // stocks the kitchen twice, and adopting the
+                            // stocked spelling re-ticks the row in the same
+                            // click.
+                            Keep = line.IsFood && first
+                                && IngredientMatcher.NearMatch(items, line.Name) is null,
                             Name = line.Name,
                             Quantity = line.Quantity,
                         };
@@ -1051,6 +1099,8 @@ else
     {
         scanRows = null;
         scanError = null;
+        scanNameRefs.Clear();
+        focusScanName = null;
     }
 
     // What this row would do to the kitchen if confirmed. Derived on every
@@ -1058,6 +1108,23 @@ else
     // mid-review flips the badge from New to Replaces on its own — the same
     // reason SyncToName runs from the notifier as well as from the name box.
     private InventoryItem? ScanMatch(ScanRow row) => IngredientMatcher.ExactMatch(items, row.Name);
+
+    // Derived per render for the same reason as ScanMatch: a row another tab
+    // creates mid-review can turn a New badge into a Looks-like on its own.
+    private InventoryItem? ScanNearMatch(ScanRow row) => IngredientMatcher.NearMatch(items, row.Name);
+
+    // The person just said "this line is that row": take the stocked spelling,
+    // and tick the line — a near match arrives unticked, so the click that
+    // fixes the name is also the one that selects it. The badge re-derives on
+    // the render this triggers: ExactMatch now hits, so it reads Replaces or
+    // No change — or Duplicate, when an earlier line already carries the
+    // adopted name, which is correct and exactly what the review is for.
+    private void AdoptStockedName(ScanRow row, InventoryItem match)
+    {
+        row.Name = match.Name;
+        row.Keep = true;
+        focusScanName = row;
+    }
 
     // Whether confirming this row would come back Unchanged. Trimmed, because
     // that is the only normalization InventoryService applies to a quantity that
@@ -1164,6 +1231,10 @@ else
             Logger.LogWarning(ex, "Could not finish adding a scanned receipt");
             confirming = false;
             scanRows?.RemoveAll(written.Contains);
+            // The captures for the pruned rows go with them; the survivors
+            // re-capture on this render.
+            scanNameRefs.Clear();
+            focusScanName = null;
             scanError = $"Stopped after {Plural(written.Count, "line")}. "
                 + "The rest are still listed — try again.";
             return;
@@ -1172,6 +1243,8 @@ else
         confirming = false;
         scanRows = null;
         scanError = null;
+        scanNameRefs.Clear();
+        focusScanName = null;
         ShowStatus(DescribeScan(created, updated, unchanged));
     }
 

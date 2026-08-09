@@ -170,9 +170,22 @@ design: it serves a trusted home LAN.
     person looking at the review can say two spellings are one thing. Assume it
     when reasoning about "confirming twice is safe": it is safe for the names
     that came back identical, and only those.
+    What the review does about it is **ask**: a row with no exact match but a
+    stocked row close by (`IngredientMatcher.NearMatch` — word sets compared
+    both ways, so reorderings, till truncations of ≥3 letters, and accent-only
+    spellings reach where `Suggest`'s budgets cannot) badges **Looks like**
+    with a one-click adopt, and arrives **unticked** for the Duplicate badge's
+    reason: confirming as-is is the failure being caught. Adopting rewrites
+    the name, re-ticks the row, and moves focus to the name box (the adopt
+    button just removed itself — the row editor's Escape bug otherwise).
+    Person-assisted, not a fix: nothing makes the model's names stable, and
+    the matcher is deliberately conservative (bidirectional word coverage, so
+    `Riz` never claims `Riz basmati`) because a wrong "Looks like" invites a
+    wrong adopt.
   - **The effect badge is derived on every render**, from
-    `IngredientMatcher.ExactMatch` — so a row another tab creates mid-review
-    flips from New to Replaces on its own, the same line `SyncToName` draws. For
+    `IngredientMatcher.ExactMatch` and `NearMatch` — so a row another tab
+    creates mid-review flips from New to Replaces (or to Looks-like) on its
+    own, the same line `SyncToName` draws. For
     a match it shows the stocked quantity beside the proposed one, because that
     badge is the only warning before an overwrite. A match whose quantity is
     already the proposed one badges **No change** instead: `Replaces` /

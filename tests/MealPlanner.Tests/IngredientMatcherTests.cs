@@ -252,4 +252,115 @@ public class IngredientMatcherTests
         Assert.Equal([longName], Names(IngredientMatcher.Suggest(items, new string('a', 60))));
         Assert.Empty(IngredientMatcher.Suggest(items, new string('b', 200)));
     }
+
+    // NearMatch. The pairs below are the receipt scanner's real output — three
+    // scans of one Metro photograph produced each left-hand spelling for the
+    // stocked right-hand one (issue #30) — so they are the specification, not
+    // examples.
+
+    [Fact]
+    public void A_reordered_name_is_a_near_match()
+    {
+        List<InventoryItem> items = [Item("Mars Twix Chocolat")];
+
+        Assert.Equal("Mars Twix Chocolat",
+            IngredientMatcher.NearMatch(items, "Chocolat Mars/Twix")?.Name);
+        Assert.Equal("Mars Twix Chocolat",
+            IngredientMatcher.NearMatch(items, "Chocolat Mars Twix")?.Name);
+    }
+
+    [Fact]
+    public void A_till_truncated_word_finds_the_stocked_spelling()
+    {
+        List<InventoryItem> items = [Item("Canard catégorie A")];
+
+        Assert.Equal("Canard catégorie A",
+            IngredientMatcher.NearMatch(items, "Canard cat A")?.Name);
+    }
+
+    [Fact]
+    public void An_accent_only_difference_is_a_near_match()
+    {
+        // ExactMatch refuses accent folding on purpose — to the NOCASE index
+        // "Cafe" and "Café" are two rows, which is exactly the duplicate this
+        // badge exists to put in front of a person.
+        List<InventoryItem> items = [Item("Café")];
+
+        Assert.Equal("Café", IngredientMatcher.NearMatch(items, "Cafe")?.Name);
+    }
+
+    [Fact]
+    public void A_name_with_an_uncovered_word_is_not_near()
+    {
+        // Coverage is bidirectional: "basmati" has no counterpart in "Riz", so
+        // the claim fails. A scanned "Riz" may well be the stocked basmati —
+        // but it may not, and a wrong "Looks like" invites a wrong adopt.
+        List<InventoryItem> items = [Item("Riz basmati"), Item("Lait d'amande")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, "Riz"));
+        Assert.Null(IngredientMatcher.NearMatch(items, "Lait"));
+    }
+
+    [Fact]
+    public void Sharing_a_first_word_is_not_enough()
+    {
+        List<InventoryItem> items = [Item("Sauce soja")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, "Sauce tomate"));
+    }
+
+    [Fact]
+    public void Diverging_inside_a_word_is_not_a_prefix()
+    {
+        // "peas" is not a prefix of "peanut" — they part at the fourth letter —
+        // and at four characters the typo budget is one edit, not the two this
+        // needs. The substring scan AGENTS.md warns about would say yes here.
+        List<InventoryItem> items = [Item("Peanut")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, "Peas"));
+    }
+
+    [Fact]
+    public void A_two_letter_prefix_does_not_match()
+    {
+        // Two letters would let "de" claim half the French in this kitchen.
+        List<InventoryItem> items = [Item("Depuis toujours")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, "De toujours"));
+    }
+
+    [Fact]
+    public void An_exact_match_is_never_offered_as_near()
+    {
+        // The badge ladder asks ExactMatch first; answering the same row here
+        // would put "Looks like Salt" on a line that *is* Salt.
+        List<InventoryItem> items = [Item("Salt")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, "salt"));
+        Assert.Null(IngredientMatcher.NearMatch(items, "  Salt  "));
+    }
+
+    [Fact]
+    public void Ties_prefer_the_fewest_fuzzy_words_then_the_shortest_name()
+    {
+        // "Chocolat Mars Twix" covers the query with three equal words;
+        // "Chocolats Mars Twix" needs a typo match for its first. The row that
+        // needed the least squinting is the likelier identity.
+        List<InventoryItem> items = [Item("Chocolats Mars Twix"), Item("Chocolat Mars Twix")];
+
+        Assert.Equal("Chocolat Mars Twix",
+            IngredientMatcher.NearMatch(items, "Mars Twix Chocolat")?.Name);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void A_blank_name_has_no_near_match(string? name)
+    {
+        List<InventoryItem> items = [Item("Salt")];
+
+        Assert.Null(IngredientMatcher.NearMatch(items, name));
+        Assert.Null(IngredientMatcher.NearMatch(null, "Salt"));
+    }
 }

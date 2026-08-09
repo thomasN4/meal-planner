@@ -68,6 +68,164 @@ internal static class IngredientMatcher
     }
 
     /// <summary>
+    /// The stocked row a scanned name is probably another spelling of, or
+    /// <c>null</c>. Exists for the receipt review: the model's names are not
+    /// stable between scans of one photograph — "Mars Twix Chocolat" comes back
+    /// as "Chocolat Mars/Twix", "Canard catégorie A" as "Canard cat A" — and
+    /// each variant is a name the inventory has never seen, so it would badge
+    /// New and quietly stock the kitchen twice. Only a person can say two
+    /// spellings are one thing; this finds the candidate for them to say it to.
+    /// <para>
+    /// <see cref="Suggest"/> cannot do this job: it compares the whole query
+    /// against whole names or single words, so a word reordering or a till
+    /// truncation ("cat" for "catégorie", six edits) lands far outside its
+    /// budgets. This compares <em>word sets</em> instead, both ways — every
+    /// word of each name needs a counterpart in the other (equal, a prefix of
+    /// at least three characters, or within the per-word typo budget). The
+    /// bidirectional requirement is what keeps it conservative: "Riz" does not
+    /// claim "Riz basmati", because "basmati" has no counterpart. A wrong
+    /// "Looks like" invites a wrong adopt, so precision beats recall here.
+    /// </para>
+    /// <para>
+    /// An exact (trim, ignore-case) match is never returned — that is
+    /// <see cref="ExactMatch"/>'s answer and the review's earlier branch. An
+    /// accent-only difference ("Cafe" for "Café") <em>is</em> returned: to the
+    /// NOCASE index those are two rows, which is exactly the duplicate this
+    /// exists to catch. Ties prefer the row needing the fewest fuzzy word
+    /// matches, then the shortest name, then alphabetical — deterministic, so
+    /// the badge cannot flap between renders.
+    /// </para>
+    /// </summary>
+    internal static InventoryItem? NearMatch(IReadOnlyList<InventoryItem>? items, string? name)
+    {
+        if (items is null) return null;
+
+        var query = name?.Trim();
+        if (string.IsNullOrEmpty(query)) return null;
+
+        var queryWords = Words(Fold(query));
+        if (queryWords.Count == 0) return null;
+
+        InventoryItem? best = null;
+        var bestFuzzy = int.MaxValue;
+
+        foreach (var item in items)
+        {
+            if (string.Equals(item.Name, query, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var itemWords = Words(Fold(item.Name));
+            if (itemWords.Count == 0) continue;
+
+            if (!Covers(queryWords, itemWords, out var queryFuzzy)
+                || !Covers(itemWords, queryWords, out var itemFuzzy))
+            {
+                continue;
+            }
+
+            var fuzzy = queryFuzzy + itemFuzzy;
+            if (best is null
+                || fuzzy < bestFuzzy
+                || (fuzzy == bestFuzzy
+                    && (item.Name.Length < best.Name.Length
+                        || (item.Name.Length == best.Name.Length
+                            && StringComparer.OrdinalIgnoreCase.Compare(item.Name, best.Name) < 0))))
+            {
+                best = item;
+                bestFuzzy = fuzzy;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Whether every word of <paramref name="from"/> has a counterpart in
+    /// <paramref name="to"/> (many-to-one is fine — no pairing-off, on
+    /// purpose). <paramref name="fuzzyMatches"/> counts the words whose best
+    /// counterpart was not an outright equal; the tiebreak reads it.
+    /// </summary>
+    private static bool Covers(List<string> from, List<string> to, out int fuzzyMatches)
+    {
+        fuzzyMatches = 0;
+
+        foreach (var word in from)
+        {
+            var matched = false;
+            var exact = false;
+
+            foreach (var other in to)
+            {
+                if (word == other)
+                {
+                    matched = true;
+                    exact = true;
+                    break;
+                }
+
+                if (!matched && WordsNear(word, other))
+                {
+                    matched = true;
+                }
+            }
+
+            if (!matched) return false;
+            if (!exact) fuzzyMatches++;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether two folded words are close enough to stand in for each other: a
+    /// prefix of at least three characters (the till's "cat" for "catégorie" —
+    /// two would let "de" claim half of French), or within the same typo
+    /// budget <see cref="Suggest"/> uses, which is zero for short words, so a
+    /// single-letter word can only ever match by equality.
+    /// </summary>
+    private static bool WordsNear(string a, string b)
+    {
+        var (shorter, longer) = a.Length <= b.Length ? (a, b) : (b, a);
+        if (shorter.Length >= 3 && longer.StartsWith(shorter, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var budget = MaxDistanceFor(shorter.Length);
+        return budget > 0 && Distance(a, b, budget) <= budget;
+    }
+
+    /// <summary>
+    /// The words of an already-folded name — runs of letters and digits, the
+    /// same rule <see cref="ClosestWordDistance"/> walks with.
+    /// </summary>
+    private static List<string> Words(string folded)
+    {
+        var words = new List<string>();
+        var start = -1;
+
+        for (var i = 0; i <= folded.Length; i++)
+        {
+            var inWord = i < folded.Length && char.IsLetterOrDigit(folded[i]);
+            if (inWord)
+            {
+                if (start < 0) start = i;
+                continue;
+            }
+
+            if (start >= 0)
+            {
+                words.Add(folded[start..i]);
+                start = -1;
+            }
+        }
+
+        return words;
+    }
+
+    /// <summary>
     /// Near matches for <paramref name="query"/>, best first: names that start
     /// with it, then names that contain it, then names within a typo's reach,
     /// then names with a <em>word</em> within a typo's reach.
