@@ -240,13 +240,18 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
 
+        // Outside the try so the catch blocks can hand them to
+        // KillAndDrainAsync — a task declared inside is out of scope by then.
+        Task<string>? stdout = null;
+        Task<string>? stderr = null;
+
         try
         {
             // Start draining both pipes before writing: a model that talks
             // enough to fill the stdout buffer would otherwise block forever
             // while we block waiting to finish writing stdin.
-            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+            stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            stderr = process.StandardError.ReadToEndAsync(timeout.Token);
 
             // The prompt goes over stdin rather than argv: a whole inventory
             // is unbounded in size and argv is not.
@@ -265,14 +270,50 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Kill(process);
+            await KillAndDrainAsync(process, stdout, stderr);
             throw new TimeoutException(
                 $"claude did not answer within {_options.TimeoutSeconds}s.");
         }
         catch (OperationCanceledException)
         {
-            Kill(process);
+            await KillAndDrainAsync(process, stdout, stderr);
             throw;
+        }
+        catch (Exception)
+        {
+            // Anything else that escapes mid-run — realistically an IOException
+            // from the stdin write when the CLI exited early. `using var
+            // process` disposes the handle, which does not kill the child, so
+            // without this a broken pipe leaves a claude process behind. The
+            // window here is a prompt's worth of bytes where the scanner's is
+            // megabytes of base64, which is why the scanner grew this first
+            // (issue #29) — less likely is not impossible.
+            await KillAndDrainAsync(process, stdout, stderr);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Every way out of a failed run comes through here: kill the child, then
+    /// observe the pipe drains. Unobserved task exceptions are harmless on
+    /// .NET today, but code that abandons two tasks on every failure path
+    /// reads as though someone checked that, and this way someone has.
+    /// </summary>
+    private async Task KillAndDrainAsync(Process process, Task<string>? stdout, Task<string>? stderr)
+    {
+        Kill(process);
+
+        try
+        {
+            if (stdout is not null && stderr is not null)
+            {
+                await Task.WhenAll(stdout, stderr);
+            }
+        }
+        catch
+        {
+            // Cancelled with the token, or faulted with the pipe — either way
+            // the failure being reported is the one that got us here.
         }
     }
 

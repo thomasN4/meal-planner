@@ -725,10 +725,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     And one that is reasoning rather than measurement: **a broken pipe has to
     kill the child.** `using var process` disposes a handle; it does not kill
     what the handle points at, so an `IOException` from the stdin write escaping
-    `RunAsync` leaves a `claude` process behind. The scanner catches every
-    exception to `Kill` for that reason, and it matters here more than in
-    `ClaudeIngredientClassifier` — that one writes a few hundred bytes, this one
-    writes megabytes of base64, and the window is the whole of the write.
+    `RunAsync` leaves a `claude` process behind. Since issue #29 all three
+    callers share the same shape: every way out of a failed run goes through
+    `KillAndDrainAsync`, which kills the child and then observes the
+    stdout/stderr tasks the failure abandoned (harmless unobserved on .NET
+    today, but code that abandons two tasks on every failure path reads as
+    though someone checked, and this way someone has). The window is widest in
+    the scanner — megabytes of base64 against the classifier's few hundred
+    bytes — which is why it grew the catch-all first. The three `RunAsync`
+    bodies are meant to read identically; a fix landing in one belongs in all
+    three.
 - The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
   `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
   built-in query asks for `projectCards`, which the API now rejects. Add

@@ -295,14 +295,19 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
 
+        // Outside the try so the catch blocks can hand them to
+        // KillAndDrainAsync — a task declared inside is out of scope by then.
+        Task<string>? stdout = null;
+        Task<string>? stderr = null;
+
         try
         {
             // Start draining both pipes before writing. It matters more here
             // than anywhere else in this app: the payload is a megabytes-long
             // base64 blob, so the write below is guaranteed to outrun the pipe
             // buffer, and a process not being read from would deadlock us both.
-            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+            stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            stderr = process.StandardError.ReadToEndAsync(timeout.Token);
 
             await process.StandardInput.WriteAsync(payload.AsMemory(), timeout.Token);
             // The newline is part of the protocol, not formatting: stream-json
@@ -323,13 +328,13 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Kill(process);
+            await KillAndDrainAsync(process, stdout, stderr);
             throw new TimeoutException(
                 $"claude did not answer within {_options.TimeoutSeconds}s.");
         }
         catch (OperationCanceledException)
         {
-            Kill(process);
+            await KillAndDrainAsync(process, stdout, stderr);
             throw;
         }
         catch (Exception)
@@ -341,8 +346,32 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             // matters more here than in ClaudeIngredientClassifier: that one
             // writes a few hundred bytes, this one writes megabytes of base64,
             // and the window is the whole of the write.
-            Kill(process);
+            await KillAndDrainAsync(process, stdout, stderr);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Every way out of a failed run comes through here: kill the child, then
+    /// observe the pipe drains. Unobserved task exceptions are harmless on
+    /// .NET today, but code that abandons two tasks on every failure path
+    /// reads as though someone checked that, and this way someone has.
+    /// </summary>
+    private async Task KillAndDrainAsync(Process process, Task<string>? stdout, Task<string>? stderr)
+    {
+        Kill(process);
+
+        try
+        {
+            if (stdout is not null && stderr is not null)
+            {
+                await Task.WhenAll(stdout, stderr);
+            }
+        }
+        catch
+        {
+            // Cancelled with the token, or faulted with the pipe — either way
+            // the failure being reported is the one that got us here.
         }
     }
 
