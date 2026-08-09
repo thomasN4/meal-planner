@@ -165,9 +165,14 @@
     color: var(--bs-secondary-color);
 }
 
-/* An unticked row is still legible, just clearly not going anywhere. Opacity
-   rather than a colour so it says the same thing in both themes. */
-.scan-row-dropped {
+/* An unticked row still reads as excluded — its empty checkbox and a dimmed
+   verdict column — without washing out the name and quantity boxes: dimmed
+   whole, a real value ("Sac réutilisable") read as placeholder text. Opacity
+   rather than a colour so it says the same thing in both themes and under
+   Dark Reader, and never opacity alone — the checkbox itself is the state. */
+.scan-row-dropped .scan-keep,
+.scan-row-dropped .scan-department,
+.scan-row-dropped .scan-effect {
     opacity: 0.55;
 }
 
