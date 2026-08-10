@@ -42,6 +42,14 @@ builder.Services.Configure<RecipeGenerationOptions>(
 builder.Services.AddSingleton<IRecipeGenerator, ClaudeRecipeGenerator>();
 builder.Services.AddScoped<RecipeService>();
 
+// Receipt scanning. Stateless singleton like the generator, and with no
+// database access at all: it turns an uploaded file into proposed lines, and
+// the inventory page writes the ones a household member confirms through the
+// InventoryService it already holds.
+builder.Services.Configure<ReceiptScanningOptions>(
+    builder.Configuration.GetSection(ReceiptScanningOptions.SectionName));
+builder.Services.AddSingleton<IReceiptScanner, ClaudeReceiptScanner>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()

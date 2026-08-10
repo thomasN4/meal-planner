@@ -114,6 +114,130 @@ design: it serves a trusted home LAN.
     on the variant returns the wrong button), and the saved list renders outside
     the `Enabled` guard that a test asserts holds no `btn-primary` at all.
     Generate carries its own `generate` class for this reason.
+- **Receipt scanning** — the scan card on `/inventory`. `ClaudeReceiptScanner`
+  (`IReceiptScanner`) reads the grocery lines off a photo or PDF, and the page
+  puts them in a review list; **nothing is written until someone confirms**, and
+  then through `InventoryService.UpsertAsync` like any other write. A receipt is
+  a poor description of a pantry — till abbreviations, carrier bags and
+  batteries, and an `UpsertAsync` that *replaces* a free-text quantity there is
+  no honest way to add to. The review is the feature, not a confirmation step
+  bolted onto it. Nothing about a receipt is persisted and the file never
+  touches disk: bytes go from the upload straight to the subprocess's stdin. See
+  `docs/plans/2026-08-05-receipt-scanning.md`.
+  - **No category travels with a scanned line.** The upsert passes `null`, which
+    lands a new row in `Other` and leaves an existing row's category alone, so
+    `IngredientCategorizer` keeps owning classification. Asking the scanner for
+    a category would take it away from the one service that has the cache and
+    the batching — and it is free there, because a scan's rows arrive together.
+  - **Non-food lines arrive unticked, never dropped.** `isFood` decides a
+    checkbox, not whether the row is shown: it is a guess about someone else's
+    kitchen, and a greyed row costs one click to disagree with where a missing
+    one leaves no recourse. A **repeated name** arrives unticked for the same
+    reason and gets a `Duplicate` badge naming the line it collides with.
+  - **A real till receipt rings the same thing up on several lines**, which is
+    the one thing a synthetic test receipt will not teach you. Two lines of
+    `LONGE PORC` used to become two rows both badged "New" — `ScanMatch` asks
+    the *inventory*, which knows nothing about the rest of the receipt — and
+    confirming created the first and then silently updated it with the second:
+    two bought, one row, and a status line reporting a create and an update.
+    Name is identity here, so this collision belongs to the review.
+    `FirstUseOf` is the guard; the prompt *also* asks for one entry per thing
+    with a count, and both are needed. The prompt is what makes the common case
+    right (measured: the same receipt now returns `Longe de porc` ×2 as one
+    line), the guard is what keeps a model that ignores it from costing the
+    household a purchase.
+  - **A line with no price is a department heading, not a purchase.** Real
+    receipts are laid out by department — `EPICERIE TX`, `VIANDE`,
+    `FRUIT/LEGUME`, `B.B.Q.`, `METS CUIS.TX` — and without a rule naming them
+    the model returned `Mets cuisinés` and `Fruits coupés` as groceries, folded
+    `B.B.Q.` into the name of the line under it, and **dropped the second line
+    that heading covered**. A silently omitted line is this feature's worst
+    failure mode: nothing on screen says it was there.
+    **The rule makes this rarer, not impossible** — measured in a browser on
+    2026-08-06, three scans of one real Metro photo: two clean, and the third
+    returned `Mets cuisinés sous-marins viande` (`METS CUIS.TX` +
+    `SOUS-MARINS VIAN`) and `Fruits coupés melon tranchés` (`FRUITS COUPE` +
+    `MELON TRANCHES`). Don't write "the heading hole is closed" anywhere; the
+    review is what catches the residue, which is the argument for the review.
+    Since issue #31 the schema also gives every line a **`department` field**
+    (required, `""` for none — a slot the model must fill is harder to ignore
+    than an instruction to skip, though the parser tolerates its absence), the
+    prompt routes headings there instead of into `name`, and the review shows
+    it muted beside the row — so leftover glue sits next to its own double,
+    visible instead of silent. `ScannedLine.Department` is display-only and
+    never persisted. Measured 2026-08-08, three scans of the same Metro photo
+    with the field in place: every line carried a department, no scan welded
+    two covered lines together, and nothing was dropped — the failure changed
+    shape rather than vanishing. Scan 2 returned `Mets cuisinés` as its own
+    row (department: itself, an obvious tell one click unticks); scan 3
+    suffixed a heading into `Quart de cuisse de poulet BBQ` while the
+    department column said `Viande` beside it. The residue is now visible in
+    the review, which is the claim — not that it is gone.
+  - **The model's names are not stable between scans of one photograph**, and
+    that is what `ScanMatch` and `FirstUseOf` both key on. The same Metro photo
+    produced `Mars Twix Chocolat`, then `Chocolat Mars/Twix`, then
+    `Chocolat Mars Twix`; `Canard catégorie A` came back as `Canard cat A`.
+    Each variant is a new name, so the badge says New, the duplicate guard sees
+    nothing, and a re-scan quietly stocks the kitchen twice. Quantities drift
+    the same way (four chocolates read `1` each on one pass and blank on the
+    next). Nothing in this app fixes that — name is identity here, and only a
+    person looking at the review can say two spellings are one thing. Assume it
+    when reasoning about "confirming twice is safe": it is safe for the names
+    that came back identical, and only those.
+    What the review does about it is **ask**: a row with no exact match but a
+    stocked row close by (`IngredientMatcher.NearMatch` — word sets compared
+    both ways, so reorderings, till truncations of ≥3 letters, and accent-only
+    spellings reach where `Suggest`'s budgets cannot) badges **Looks like**
+    with a one-click adopt, and arrives **unticked** for the Duplicate badge's
+    reason: confirming as-is is the failure being caught. Adopting rewrites
+    the name, re-ticks the row, and moves focus to the name box (the adopt
+    button just removed itself — the row editor's Escape bug otherwise).
+    Person-assisted, not a fix: nothing makes the model's names stable, and
+    the matcher is deliberately conservative (bidirectional word coverage, so
+    `Riz` never claims `Riz basmati`) because a wrong "Looks like" invites a
+    wrong adopt.
+  - **The effect badge is derived on every render**, from
+    `IngredientMatcher.ExactMatch` and `NearMatch` — so a row another tab
+    creates mid-review flips from New to Replaces (or to Looks-like) on its
+    own, the same line `SyncToName` draws. For
+    a match it shows the stocked quantity beside the proposed one, because that
+    badge is the only warning before an overwrite. A match whose quantity is
+    already the proposed one badges **No change** instead: `Replaces` /
+    `1 kg → 1 kg` warns about an overwrite that will not happen.
+  - **A confirm has three outcomes, not two.** `UpsertAsync` answers
+    `Unchanged` when the quantity is identical and no category or note moved —
+    exactly this caller's shape, since it passes neither — so
+    `if (Created) created++; else updated++` reported "Updated 1 item" for a
+    write that did nothing, and re-scanning a receipt hits it every time.
+    `DescribeScan` composes one clause per non-zero counter, the shape
+    `InventoryChange.Describe()` was already forced into twice: a branch that
+    has to cover an outcome it never names ends up announcing a different one.
+    Same reason the partial-failure path prunes the rows it wrote from
+    `scanRows` — "the rest are still listed" has to be true, or the retry it
+    invites re-upserts everything and reports the lot as updates.
+  - **What the parser dropped is said on screen.** `ScanAsync` returns a
+    `ScanResult(Lines, Warning)`, and `WarnAbout` turns exactly two of the
+    parser's diagnostics — a receipt truncated at `MaxLines`, and entries with
+    no usable name — into a sentence rendered beside the review. The rest
+    ("no output", "no result line") arrive as an empty `Lines` and keep the
+    page's one failure message; warning as well would put two messages on
+    screen about one event. A silently short review is the same failure the
+    prompt's department-heading rule closes on the model's side, and `MaxLines`
+    reopened it on ours. `MaxLines <= 0` means **no ceiling**: read the other
+    way it is a setting that switches the feature off while looking like a
+    limit, and `Enabled` is the switch.
+  - **Cancel is answered twice**: by the token, *and* by an
+    `IsCancellationRequested` check after the await. A scan that finished while
+    the click was in flight returns real lines and no exception to catch, and
+    opening a review out of one the user just called off is the same bug as
+    ignoring the button. A page test found this rather than a person.
+  - the review rows live in `@code` fields, never in the DOM (the row editor's
+    rule, sharper here — confirming writes one row at a time and each write
+    publishes, so a re-render lands *between* rows); the card sits **below** the
+    add form, which several tests depend on via `Find("button.btn-primary")`;
+    scan errors use `role="alert"`, never a second `role="status"`; and the
+    `<InputFile>` is `@key`ed on a counter, or picking the same file twice fires
+    no change event and reads as a dead button.
 - **The ingredient combobox is shared** —
   `Components/Shared/IngredientCombobox.razor` (+ its own `.razor.css`) owns the
   *widget*: input, listbox, highlight with its wrap to −1, every aria attribute,
@@ -253,6 +377,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+  - **`UploadFiles` blocks until the handler it triggers has finished**, unlike
+    `Click()`. Any test that parks a scan on a gate and then wants to click
+    something has to upload on its own thread (`Task.Run`) — inline, there is no
+    thread left to click with and the test **hangs rather than fails**, which
+    costs a lot more to diagnose than a red assertion.
+  - **The receipt review is a `<ul>`, not a `<table>`**, and that is a test
+    concern rather than a design one: the page's one `<table>` is the inventory,
+    and several tests select inside `tbody` to find the row editor. A second
+    tbody full of inputs would make every one of those ambiguous the moment a
+    receipt was open.
 - **Driving a real browser is a different instrument, and every trap below
   produces a confident wrong answer.** Plenty here is browser-only — focus,
   scroll, layout, colour, `@onmousedown:preventDefault` — so this comes up. The
@@ -573,6 +707,41 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     from a LAN-facing text box and there is no shell here to quote against.
     (Both names and notes go over **stdin**, not argv, so this guards the flags
     rather than the payload — but the rule stands for anything added later.)
+  - **A picture goes over stdin too** (`ClaudeReceiptScanner`), as a base64
+    `image` or `document` content block, using
+    `--input-format stream-json --output-format stream-json --verbose`. Those
+    three travel as a set — the input format requires the matching output
+    format, which requires `--verbose` — and that combination is what keeps
+    `--tools ""` true for an image. The alternative is writing the upload to a
+    temp directory and handing the model the `Read` tool, i.e. trading the whole
+    no-tools posture for a file the app already has in memory. Measured on both
+    paths: `"tools":["StructuredOutput"]` on the `init` line, nothing else.
+    Three more things measured rather than assumed:
+    - **don't name a schema array `items`.** Named that, the model answered
+      `{"items":{"items":[…]}}` — the schema's own array keyword was in front of
+      it — the answer was rejected and it burned a turn recovering. `products`
+      was right first time. This is a naming rule for every schema here, not a
+      receipt quirk.
+    - **stream-json output means finding the `{"type":"result"}` line**, not the
+      first `{` in the stream the way the other two parsers do. The assistant's
+      own turn comes earlier and can hold the shape the schema *rejected*.
+    - **nothing needs to resize a photograph.** A 3024×4032 JPEG scanned in 8.0s
+      at 2.05 MB and 7.3s at 4.47 MB, one turn each — the CLI does the
+      shrinking. This is what killed a planned browser-side canvas re-encode;
+      `MaxBytes` (5 MB, the API's own per-image limit) is the whole size story.
+    And one that is reasoning rather than measurement: **a broken pipe has to
+    kill the child.** `using var process` disposes a handle; it does not kill
+    what the handle points at, so an `IOException` from the stdin write escaping
+    `RunAsync` leaves a `claude` process behind. Since issue #29 all three
+    callers share the same shape: every way out of a failed run goes through
+    `KillAndDrainAsync`, which kills the child and then observes the
+    stdout/stderr tasks the failure abandoned (harmless unobserved on .NET
+    today, but code that abandons two tasks on every failure path reads as
+    though someone checked, and this way someone has). The window is widest in
+    the scanner — megabytes of base64 against the classifier's few hundred
+    bytes — which is why it grew the catch-all first. The three `RunAsync`
+    bodies are meant to read identically; a fix landing in one belongs in all
+    three.
 - The installed `gh` (2.45.0, from Ubuntu's archive) fails on `gh issue view`,
   `gh pr view` and `gh pr edit` with a Projects (classic) GraphQL error — its
   built-in query asks for `projectCards`, which the API now rejects. Add

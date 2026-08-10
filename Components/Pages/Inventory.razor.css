@@ -112,6 +112,77 @@
     transform: rotate(90deg);
 }
 
+/* One receipt line: tick, name, quantity, and what it is about to do. Lays
+   itself out with flex for the same reason the row editor does — a narrow
+   viewport should grow the row a line rather than crush four controls into a
+   strip. */
+.scan-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0;
+}
+
+.scan-row + .scan-row {
+    border-top: 1px solid var(--bs-border-color);
+}
+
+/* The department heading the receipt filed the line under — context, not
+   data, so it reads like the effect detail opposite it. Always in the row
+   (empty or not) so the name boxes line up down the list. */
+.scan-row .scan-department {
+    flex: 0 0 6rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    /* The muted-text token, not --bs-secondary — see .category-chevron. */
+    color: var(--bs-secondary-color);
+}
+
+.scan-row .scan-name {
+    flex: 2 1 12rem;
+}
+
+.scan-row .scan-quantity {
+    flex: 1 1 8rem;
+}
+
+/* Pushed to the far edge so every badge in the list lines up: the eye reads
+   this column down the page to see what a receipt is going to do, and a badge
+   that tracks the length of the name beside it cannot be read that way. */
+.scan-effect {
+    flex: 1 1 14rem;
+    margin-left: auto;
+    text-align: right;
+}
+
+.scan-effect-detail {
+    display: block;
+    font-size: 0.8125rem;
+    /* The muted-text token, not --bs-secondary — see .category-chevron. */
+    color: var(--bs-secondary-color);
+}
+
+/* An unticked row still reads as excluded — its empty checkbox and a dimmed
+   verdict column — without washing out the name and quantity boxes: dimmed
+   whole, a real value ("Sac réutilisable") read as placeholder text. Opacity
+   rather than a colour so it says the same thing in both themes and under
+   Dark Reader, and never opacity alone — the checkbox itself is the state. */
+.scan-row-dropped .scan-keep,
+.scan-row-dropped .scan-department,
+.scan-row-dropped .scan-effect {
+    opacity: 0.55;
+}
+
+.scan-help {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--bs-secondary-color);
+}
+
 /* The combobox's own rules — .name-combobox, .name-suggestions,
    .name-suggestion and its highlight — moved to
    Components/Shared/IngredientCombobox.razor.css when the widget became a
