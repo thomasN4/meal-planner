@@ -156,7 +156,7 @@ diagnosis in [#5](https://github.com/thomasN4/meal-planner/issues/5) that one
 retry holds for two writers and fails at three. The verification guardrails —
 have/missing claims checked against real inventory rows rather than taken on the
 model's word, the isolation flags on the `claude -p` calls. The test suite
-itself. The `scripts/` that mint App installation tokens.
+itself.
 
 ### Verifying this
 
@@ -171,9 +171,11 @@ gh pr list --state all --limit 100 --json number,author,headRefName
 
 [PR #34](https://github.com/thomasN4/meal-planner/pull/34) was opened by the App
 from a commit authored by the App — it exists partly as a test that the
-attribution path works. Where a branch is not named `claude/…`, that is not a
-claim of human authorship; it usually means the branch was created before the
-convention settled.
+attribution path works, and it is the clearest single piece of evidence here.
+Note that it is still open: the App identity works, but the scripts that mint
+its installation tokens are not on `main`. Where a branch is not named
+`claude/…`, that is not a claim of human authorship; it usually means the branch
+was created before the convention settled.
 
 ## License
 
