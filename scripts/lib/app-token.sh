@@ -53,7 +53,7 @@ fi
 
 role_uc="${role^^}"
 role_uc="${role_uc//-/_}"
-app_slug="meal-planner-$role-claude"
+app_slug="meal-planner-$role"
 
 # Per-role variables, resolved by indirection: MEALPLANNER_CODER_APP_ID,
 # MEALPLANNER_REVIEWER_APP_ID, and so on. There is deliberately no list of valid

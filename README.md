@@ -148,7 +148,7 @@ bolted onto the side. Also the requirement that concurrent writers stay
 consistent, that tests run against real SQLite files and real concurrent writers
 rather than fakes, that CI gate every pull request, and that each design
 decision be written down with the failure that motivated it. Registered the
-`meal-planner-coder-claude` GitHub App.
+`meal-planner-coder` GitHub App.
 
 **Claude Code** — the implementation, and the design work inside it. All of the
 C#. The concurrency mechanics, including the bounded-retry upsert and the

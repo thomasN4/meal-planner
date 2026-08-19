@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Comment on an issue or PR as meal-planner-coder-claude[bot].
+# Comment on an issue or PR as meal-planner-coder[bot].
 #
 # A shim, and the shape is the point: what a permission rule can name is a
 # filename, so one file per (identity, capability) means a rule grants exactly

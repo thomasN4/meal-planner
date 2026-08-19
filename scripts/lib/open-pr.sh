@@ -60,8 +60,8 @@ fi
 # unrecognised author. Hardcoded to the coder rather than derived from the role,
 # because the role is already pinned to 'coder' above — a table of identities
 # here would imply the others can get this far.
-bot_name="meal-planner-coder-claude[bot]"
-bot_email="316699224+meal-planner-coder-claude[bot]@users.noreply.github.com"
+bot_name="meal-planner-coder[bot]"
+bot_email="316699224+meal-planner-coder[bot]@users.noreply.github.com"
 
 title=""
 body=""
