@@ -131,6 +131,50 @@ were measured rather than guessed; `AGENTS.md` records what each one costs.
   conventions — including the ones that exist because something broke — are in
   [`AGENTS.md`](AGENTS.md). Worth reading before changing anything load-bearing.
 
+## Who wrote what
+
+This project was specified and directed by a human and implemented almost
+entirely by [Claude Code](https://claude.com/claude-code). That split is worth
+stating plainly rather than leaving to be inferred from the commit log.
+
+**Thomas Nguyen** — the product. What the app is for and what it must not do:
+a meal planner that feels intelligent rather than one that makes you do the
+filing. Ingredients classified on entry rather than on request; quantities left
+as free text because nobody in this house measures anything; a receipt review
+that writes nothing until it is confirmed; no accounts, no cloud, one machine
+serving the trusted LAN. The MCP endpoint exists because an agent should be able
+to act on the inventory alongside the people using it, not through a chat box
+bolted onto the side. Also the requirement that concurrent writers stay
+consistent, that tests run against real SQLite files and real concurrent writers
+rather than fakes, that CI gate every pull request, and that each design
+decision be written down with the failure that motivated it. Registered the
+`meal-planner-coder-claude` GitHub App.
+
+**Claude Code** — the implementation, and the design work inside it. All of the
+C#. The concurrency mechanics, including the bounded-retry upsert and the
+diagnosis in [#5](https://github.com/thomasN4/meal-planner/issues/5) that one
+retry holds for two writers and fails at three. The verification guardrails —
+have/missing claims checked against real inventory rows rather than taken on the
+model's word, the isolation flags on the `claude -p` calls. The test suite
+itself. The `scripts/` that mint App installation tokens.
+
+### Verifying this
+
+Unlike a per-file authorship table, this one is checkable from the repository
+itself:
+
+```sh
+git branch -r | grep claude/          # most feature branches
+git log --format='%an' | sort | uniq -c
+gh pr list --state all --limit 100 --json number,author,headRefName
+```
+
+[PR #34](https://github.com/thomasN4/meal-planner/pull/34) was opened by the App
+from a commit authored by the App — it exists partly as a test that the
+attribution path works. Where a branch is not named `claude/…`, that is not a
+claim of human authorship; it usually means the branch was created before the
+convention settled.
+
 ## License
 
 [MIT](LICENSE).
