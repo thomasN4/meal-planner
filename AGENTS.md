@@ -782,17 +782,39 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     missing variable that names itself. `~/.bashrc` exports these, past its
     line-8 non-interactive `return`, so a non-interactive shell sees none of them.
   - the **key is found by globbing the role out of the filename**
-    (`meal-planner-<role>-claude.*.pem`), which is what keeping GitHub's download
+    (`meal-planner-<role>.*.pem`), which is what keeping GitHub's download
     name was always for. `MEALPLANNER_<ROLE>_APP_KEY` is an override, needed only
     when a rotation leaves two dated keys for one App — a real ambiguity about
     which is live, so the script stops rather than picking.
+    **Renaming an App moves the glob but not the key on disk.** The slug is
+    derived from the App's name, so the 2026-08-19 rename (dropping a redundant
+    `-claude` from both) pointed the glob at names no file had: GitHub downloads
+    a key once, under the name the App had then, and never revisits it. Both
+    keys were renamed alongside this commit, so the failure was avoided rather
+    than met — but it would have surfaced as `app-token.sh` saying "no key for
+    'coder'", which is accurate and the wrong place to start looking. The App
+    ID and the key material are untouched by a rename; only the filename is.
+    Rename the file to match rather than loosening the glob to a prefix — the
+    exact glob is what makes two matches mean "two dated keys for one App"
+    instead of "two Apps sharing a prefix".
   - **the shim passes `MEALPLANNER_INVOKED_AS`** and every core message uses it.
     After the shim's `exec` the core's `$0` is `lib/comment.sh`, which is not a
     command anyone ran, so usage text would name a path the user never typed.
   - nothing here can edit, delete, close or merge — only create. Cleanup stays a
     manual `gh api` call, which is why granting these unattended is defensible.
+  - **a rename does not orphan the commits the App already signed.** Those four
+    commits still carry `316699224+meal-planner-coder-claude[bot]@…` as their
+    author email, and GitHub still shows them as `meal-planner-coder[bot]` —
+    checked against the API on 2026-08-19, `author.login` resolves to the
+    *current* login. The numeric id is what the noreply address is matched on;
+    the login half is display text that GitHub re-renders. So no history rewrite
+    was needed, and `%ae` stays the right field for `open-pr.sh` to compare on.
+    The consequence to know is local: a branch mixing pre- and post-rename bot
+    commits trips the stray-author warning on the old ones, because that check
+    compares the whole field against the current address. It is a warning about
+    a fact, not a failure.
 - **`grep` reads a bot identity as a bracket expression.** The agent scripts in
-  `scripts/` filter git log output against `meal-planner-coder-claude[bot]`, and
+  `scripts/` filter git log output against `meal-planner-coder[bot]`, and
   as a basic regex that trailing `[bot]` is a *character class* — one character
   from `{b,o,t}` — so the pattern never matches the literal author string. A
   `grep -v` built that way keeps every line, which meant `lib/open-pr.sh`'s
