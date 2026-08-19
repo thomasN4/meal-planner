@@ -34,6 +34,14 @@ fi
 
 if (($# == 1)); then
     body="$1"
+elif [[ -t 0 ]]; then
+    # Reading stdin here is right for the documented `< body.md` form, but with a
+    # terminal on stdin it would sit waiting for EOF with nothing on screen saying
+    # so — a usage error that reads as a hung script. An unattended caller has
+    # stdin closed or redirected and never reaches this branch.
+    echo "comment-as-app.sh: no body — pass it as an argument or redirect one in" >&2
+    echo "usage: comment-as-app.sh <issue-or-pr-number> [body]" >&2
+    exit 2
 else
     body="$(cat)"
 fi

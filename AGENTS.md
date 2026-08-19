@@ -755,6 +755,27 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   true and spins past a run that finished minutes ago. Poll the plain text
   output (`gh pr checks <n>` prints `pass`/`fail`/`pending` per row) or go
   through `gh api repos/:owner/:repo/commits/<sha>/check-runs`.
+- **`grep` reads a bot identity as a bracket expression.** The agent scripts in
+  `scripts/` filter git log output against `meal-planner-coder-claude[bot]`, and
+  as a basic regex that trailing `[bot]` is a *character class* — one character
+  from `{b,o,t}` — so the pattern never matches the literal author string. A
+  `grep -v` built that way keeps every line, which meant `pr-as-app.sh`'s
+  "these commits are not authored by the bot" warning fired on every branch
+  including ones the bot wrote (PR #34 review). `grep -F` fixes the instance;
+  an exact field comparison (`awk -F'\t' '$1 != bot'` over `%ae`) is what the
+  script does now, because it cannot be re-broken by the next metacharacter
+  somebody puts in an identity, and `%ae` is the field GitHub attributes on.
+- **Pushing to an explicit URL leaves no remote-tracking ref**, and
+  `git push --set-upstream <url>` writes that *URL* into `branch.<b>.remote`.
+  So a follow-up `git branch --set-upstream-to=origin/<b>` fails — `origin/<b>`
+  does not exist — and under `|| true` it fails silently, leaving exactly the
+  state it was added to prevent. That branch then sends the next plain
+  `git push`/`git pull` through whatever ambient credential helper the machine
+  has, i.e. as a person, which for the App scripts is the attribution hole they
+  exist to close, reopened one push later. Fetch the tracking ref first
+  (`git fetch origin refs/heads/<b>:refs/remotes/origin/<b>`, through the same
+  credential helper), then set upstream, and **warn on failure** — a fixup that
+  cannot report its own failure is how this survived a verification list.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
 - **Stage explicit paths; never `git add -A`.** It once swept a
   `mealplanner.db.testbackup-182628` left by manual testing into a commit —
