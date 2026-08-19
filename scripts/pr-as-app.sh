@@ -15,18 +15,45 @@
 # argv is readable by every process on the machine for as long as the push
 # runs, and one baked into a remote URL outlives the push in .git/config.
 #
+# `--as <role>` is REQUIRED and must come FIRST, for the same permission-rule
+# reason as comment-as-app.sh: a rule matches a command prefix, so the flag has
+# to be in it. Here the role is more than a label — measured 2026-08-19, the
+# reviewer App is installed with `contents: read`, so it cannot push at all. It
+# is refused up front rather than 403-ing at the push, after a token has been
+# minted and the stray-author check has already printed.
+#
 # Usage:
-#   scripts/pr-as-app.sh --title "Subject line" --body-file /path/to/body.md
-#   scripts/pr-as-app.sh --draft --title "…" --body "One-liner"
-#   scripts/pr-as-app.sh --title "…" --body-file - < body.md
+#   scripts/pr-as-app.sh --as coder --title "Subject line" --body-file /path/to/body.md
+#   scripts/pr-as-app.sh --as coder --draft --title "…" --body "One-liner"
+#   scripts/pr-as-app.sh --as coder --title "…" --body-file - < body.md
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="${MEALPLANNER_APP_REPO:-thomasN4/meal-planner}"
 
+if [[ "${1:-}" != "--as" ]]; then
+    echo "usage: pr-as-app.sh --as <role> [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]" >&2
+    echo "       --as must come first; only 'coder' can push" >&2
+    exit 2
+fi
+# No apostrophe in a ${var:?word} message: bash honours a single quote inside it
+# even within double quotes, so "the App-s ID" written properly would open a
+# string that never closes and the whole script would fail to parse.
+role="${2:?--as needs a role, e.g. coder}"
+shift 2
+
+if [[ "$role" != "coder" ]]; then
+    echo "pr-as-app.sh: refusing to push as '$role' — only the coder App has contents:write." >&2
+    echo "pr-as-app.sh: the reviewer App is installed read-only on contents and can comment" >&2
+    echo "pr-as-app.sh: but not push; use comment-as-app.sh --as $role for that." >&2
+    exit 2
+fi
+
 # The bot's git identity. The numeric prefix is what links the noreply address
 # to the account, so GitHub attributes the commit rather than showing an
-# unrecognised author.
+# unrecognised author. Hardcoded to the coder rather than derived from the role,
+# because the role is already pinned to 'coder' above — a table of identities
+# here would imply the others can get this far.
 bot_name="meal-planner-coder-claude[bot]"
 bot_email="316699224+meal-planner-coder-claude[bot]@users.noreply.github.com"
 
@@ -49,7 +76,7 @@ while (($# > 0)); do
 done
 
 if [[ -z "$title" ]]; then
-    echo "usage: pr-as-app.sh [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]" >&2
+    echo "usage: pr-as-app.sh --as <role> [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]" >&2
     echo "       --identity prints the git author name and email to commit as" >&2
     exit 2
 fi
@@ -107,7 +134,7 @@ if [[ -n "$strays" ]]; then
     echo "    export GIT_AUTHOR_EMAIL='$bot_email' GIT_COMMITTER_EMAIL='$bot_email'" >&2
 fi
 
-token="$("$here/app-token.sh")"
+token="$("$here/app-token.sh" --as "$role")"
 
 # credential.helper reads the token from the environment, so it never appears
 # in argv or on disk. One copy, used by both the push and the fetch below.

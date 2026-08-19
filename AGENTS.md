@@ -755,6 +755,27 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   true and spins past a run that finished minutes ago. Poll the plain text
   output (`gh pr checks <n>` prints `pass`/`fail`/`pending` per row) or go
   through `gh api repos/:owner/:repo/commits/<sha>/check-runs`.
+- **One App per role, and every caller names its role.** `scripts/app-token.sh`,
+  `comment-as-app.sh` and `pr-as-app.sh` all take `--as <role>` (`coder`,
+  `reviewer`), **required, and first on the command line**. Both properties exist
+  for the permission rule rather than the parser: a rule matches a command prefix,
+  so `Bash(./scripts/comment-as-app.sh --as coder:*)` grants exactly one identity
+  and leaves the other prompting — which only holds while the flag cannot be
+  omitted or moved after the issue number. A default role would put the identity
+  back in the ambient environment, where no rule can name it.
+  - each role reads `MEALPLANNER_<ROLE>_APP_ID` (e.g. `MEALPLANNER_CODER_APP_ID`),
+    resolved by indirection, so there is **no list of valid roles in the code** —
+    the environment defines which Apps exist and an unknown role fails as a
+    missing variable that names itself. `~/.bashrc` exports these, past its
+    line-8 non-interactive `return`, so a non-interactive shell sees none of them.
+  - the **key is found by globbing the role out of the filename**
+    (`meal-planner-<role>-claude.*.pem`), which is what keeping GitHub's download
+    name was always for. `MEALPLANNER_<ROLE>_APP_KEY` is an override, needed only
+    when a rotation leaves two dated keys for one App — a real ambiguity about
+    which is live, so the script stops rather than picking.
+  - **`pr-as-app.sh` refuses any role but `coder`, before minting anything.**
+    Measured 2026-08-19: the reviewer App is installed `contents: read`, so it
+    cannot push. Both are `pull_requests: write`, so both can comment.
 - **`grep` reads a bot identity as a bracket expression.** The agent scripts in
   `scripts/` filter git log output against `meal-planner-coder-claude[bot]`, and
   as a basic regex that trailing `[bot]` is a *character class* — one character
