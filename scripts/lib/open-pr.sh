@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Push the current branch and open a pull request as the GitHub App.
 #
-# Companion to comment-as-app.sh, and narrow in the same way: it pushes the
+# Companion to comment.sh, and narrow in the same way: it pushes the
 # branch you are on and opens one PR from it. It cannot force-push, delete a
 # branch, merge, or call anything else — a history rewrite stays a manual git
 # command, the way comment cleanup stays a manual gh call.
@@ -15,25 +15,31 @@
 # argv is readable by every process on the machine for as long as the push
 # runs, and one baked into a remote URL outlives the push in .git/config.
 #
-# `--as <role>` is REQUIRED and must come FIRST, for the same permission-rule
-# reason as comment-as-app.sh: a rule matches a command prefix, so the flag has
-# to be in it. Here the role is more than a label — measured 2026-08-19, the
-# reviewer App is installed with `contents: read`, so it cannot push at all. It
-# is refused up front rather than 403-ing at the push, after a token has been
-# minted and the stray-author check has already printed.
+# This is a core, not the surface — see the note in comment.sh. Its only shim is
+# ../coder-open-pr.sh. There is deliberately **no reviewer-open-pr.sh**: measured
+# 2026-08-19 the reviewer App is installed with `contents: read` and cannot push
+# at all, and a capability an App does not have is best represented by a file
+# that does not exist. The role check below is what is left of that as defence in
+# depth — only a wrongly-written shim can now reach it — and it still refuses
+# before minting a token, rather than 403-ing at the push after the stray-author
+# check has printed.
 #
-# Usage:
-#   scripts/pr-as-app.sh --as coder --title "Subject line" --body-file /path/to/body.md
-#   scripts/pr-as-app.sh --as coder --draft --title "…" --body "One-liner"
-#   scripts/pr-as-app.sh --as coder --title "…" --body-file - < body.md
+# Usage (via the shim):
+#   scripts/coder-open-pr.sh --title "Subject line" --body-file /path/to/body.md
+#   scripts/coder-open-pr.sh --draft --title "…" --body "One-liner"
+#   scripts/coder-open-pr.sh --title "…" --body-file - < body.md
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="${MEALPLANNER_APP_REPO:-thomasN4/meal-planner}"
+# shellcheck source=/dev/null
+source "$here/common.sh"
+repo="$app_repo"
+
+me="${MEALPLANNER_INVOKED_AS:-$(basename "${BASH_SOURCE[0]}")}"
+usage="$me [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]"
 
 if [[ "${1:-}" != "--as" ]]; then
-    echo "usage: pr-as-app.sh --as <role> [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]" >&2
-    echo "       --as must come first; only 'coder' can push" >&2
+    echo "usage: $usage" >&2
     exit 2
 fi
 # No apostrophe in a ${var:?word} message: bash honours a single quote inside it
@@ -43,9 +49,9 @@ role="${2:?--as needs a role, e.g. coder}"
 shift 2
 
 if [[ "$role" != "coder" ]]; then
-    echo "pr-as-app.sh: refusing to push as '$role' — only the coder App has contents:write." >&2
-    echo "pr-as-app.sh: the reviewer App is installed read-only on contents and can comment" >&2
-    echo "pr-as-app.sh: but not push; use comment-as-app.sh --as $role for that." >&2
+    echo "$me: refusing to push as '$role' — only the coder App has contents:write." >&2
+    echo "$me: the reviewer App is installed read-only on contents and can comment" >&2
+    echo "$me: but not push; use scripts/$role-comment.sh for that." >&2
     exit 2
 fi
 
@@ -71,12 +77,12 @@ while (($# > 0)); do
         --base)      base="${2:?--base needs a branch}"; shift 2 ;;
         --draft)     draft="true"; shift ;;
         --identity)  printf '%s\n%s\n' "$bot_name" "$bot_email"; exit 0 ;;
-        *) echo "pr-as-app.sh: unknown argument: $1" >&2; exit 2 ;;
+        *) echo "$me: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
 if [[ -z "$title" ]]; then
-    echo "usage: pr-as-app.sh --as <role> [--draft] --title <title> [--body <text> | --body-file <path>] [--base <branch>]" >&2
+    echo "usage: $usage" >&2
     echo "       --identity prints the git author name and email to commit as" >&2
     exit 2
 fi
@@ -87,23 +93,23 @@ if [[ -n "$body_file" ]]; then
     elif [[ -r "$body_file" ]]; then
         body="$(cat "$body_file")"
     else
-        echo "pr-as-app.sh: cannot read body file: $body_file" >&2
+        echo "$me: cannot read body file: $body_file" >&2
         exit 2
     fi
 fi
 
 branch="$(git symbolic-ref --quiet --short HEAD)" || {
-    echo "pr-as-app.sh: detached HEAD — check out a branch first" >&2
+    echo "$me: detached HEAD — check out a branch first" >&2
     exit 2
 }
 
 if [[ "$branch" == "$base" || "$branch" == "main" || "$branch" == "master" ]]; then
-    echo "pr-as-app.sh: refusing to push '$branch' — open PRs from a topic branch" >&2
+    echo "$me: refusing to push '$branch' — open PRs from a topic branch" >&2
     exit 2
 fi
 
 if [[ -n "$(git status --porcelain)" ]]; then
-    echo "pr-as-app.sh: working tree is dirty; commit or stash first" >&2
+    echo "$me: working tree is dirty; commit or stash first" >&2
     exit 2
 fi
 
@@ -123,13 +129,13 @@ fi
 strays="$(git log "$base..HEAD" --format='%ae%x09%h %an <%ae>' \
     | awk -F'\t' -v bot="$bot_email" '$1 != bot { print $2 }')"
 if [[ -n "$strays" ]]; then
-    echo "pr-as-app.sh: warning — these commits are not authored by the bot:" >&2
+    echo "$me: warning — these commits are not authored by the bot:" >&2
     # Through a pipeline, not `printf '  %s\n' "$strays"`: that passes one
     # newline-containing argument, consumes the format once, and indents only the
     # first line.
     printf '%s\n' "$strays" | sed 's/^/  /' >&2
-    echo "pr-as-app.sh: the PR will come from the bot, the commits will not." >&2
-    echo "pr-as-app.sh: commit with the bot identity next time via:" >&2
+    echo "$me: the PR will come from the bot, the commits will not." >&2
+    echo "$me: commit with the bot identity next time via:" >&2
     echo "    export GIT_AUTHOR_NAME='$bot_name' GIT_COMMITTER_NAME='$bot_name'" >&2
     echo "    export GIT_AUTHOR_EMAIL='$bot_email' GIT_COMMITTER_EMAIL='$bot_email'" >&2
 fi
@@ -161,17 +167,17 @@ origin_slug="${origin_slug#*github.com/}"
 origin_slug="${origin_slug#*github.com:}"
 
 if [[ "$origin_slug" != "$repo" ]]; then
-    echo "pr-as-app.sh: warning — 'origin' is not $repo, so '$branch' was left" >&2
-    echo "pr-as-app.sh: tracking whatever it tracked. Set its upstream yourself." >&2
+    echo "$me: warning — 'origin' is not $repo, so '$branch' was left" >&2
+    echo "$me: tracking whatever it tracked. Set its upstream yourself." >&2
 elif GH_APP_TOKEN="$token" git -c credential.helper="$cred_helper" \
         fetch --quiet origin "refs/heads/$branch:refs/remotes/origin/$branch" \
      && git branch --set-upstream-to="origin/$branch" "$branch" >/dev/null; then
     :
 else
-    echo "pr-as-app.sh: warning — could not point '$branch' at origin/$branch." >&2
-    echo "pr-as-app.sh: it may still track a URL, in which case a later plain" >&2
-    echo "pr-as-app.sh: 'git push' authenticates as you rather than as the App." >&2
-    echo "pr-as-app.sh: fix with:" >&2
+    echo "$me: warning — could not point '$branch' at origin/$branch." >&2
+    echo "$me: it may still track a URL, in which case a later plain" >&2
+    echo "$me: 'git push' authenticates as you rather than as the App." >&2
+    echo "$me: fix with:" >&2
     echo "    git fetch origin '$branch' && git branch --set-upstream-to=origin/'$branch' '$branch'" >&2
 fi
 

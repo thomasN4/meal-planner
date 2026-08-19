@@ -755,14 +755,27 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   true and spins past a run that finished minutes ago. Poll the plain text
   output (`gh pr checks <n>` prints `pass`/`fail`/`pending` per row) or go
   through `gh api repos/:owner/:repo/commits/<sha>/check-runs`.
-- **One App per role, and every caller names its role.** `scripts/app-token.sh`,
-  `comment-as-app.sh` and `pr-as-app.sh` all take `--as <role>` (`coder`,
-  `reviewer`), **required, and first on the command line**. Both properties exist
-  for the permission rule rather than the parser: a rule matches a command prefix,
-  so `Bash(./scripts/comment-as-app.sh --as coder:*)` grants exactly one identity
-  and leaves the other prompting — which only holds while the flag cannot be
-  omitted or moved after the issue number. A default role would put the identity
-  back in the ambient environment, where no rule can name it.
+- **One App per role, and the capability is the filename.** `scripts/` holds one
+  script per (identity, capability) pair — `coder-comment.sh`,
+  `coder-open-pr.sh`, `coder-file-issue.sh`, `reviewer-comment.sh`,
+  `reviewer-file-issue.sh` — each a four-line shim over a core in `scripts/lib/`.
+  A permission rule can name a **filename**, so one file per pair means
+  `Bash(./scripts/coder-comment.sh:*)` grants exactly that pair and nothing else.
+  The earlier design put the role in a `--as` flag and required it first, which
+  worked but rested the whole property on **argument order** — an invariant a
+  later "accept the flag anywhere" edit would relax, widening a permission rule
+  with every test still green. A filename cannot drift that way.
+  - **a capability an App lacks has no file.** There is no `reviewer-open-pr.sh`:
+    measured 2026-08-19, the reviewer App is installed `contents: read` and
+    cannot push. Non-existence beats a runtime refusal — no code path, nothing to
+    get wrong — and it is the same argument as not shipping a general `gh api`
+    wrapper. `lib/open-pr.sh` keeps a role check as defence in depth, reachable
+    only by writing a wrong shim. Both Apps are `issues: write` and
+    `pull_requests: write`, so both get comment and file-issue.
+  - **`lib/` is cores, and nothing there should be granted.** `lib/app-token.sh`
+    least of all: minting a token is every capability the App has at once. The
+    cores still take `--as <role>`, now an ordinary parameter rather than a
+    boundary — the shims are the only callers that pass it.
   - each role reads `MEALPLANNER_<ROLE>_APP_ID` (e.g. `MEALPLANNER_CODER_APP_ID`),
     resolved by indirection, so there is **no list of valid roles in the code** —
     the environment defines which Apps exist and an unknown role fails as a
@@ -773,14 +786,16 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     name was always for. `MEALPLANNER_<ROLE>_APP_KEY` is an override, needed only
     when a rotation leaves two dated keys for one App — a real ambiguity about
     which is live, so the script stops rather than picking.
-  - **`pr-as-app.sh` refuses any role but `coder`, before minting anything.**
-    Measured 2026-08-19: the reviewer App is installed `contents: read`, so it
-    cannot push. Both are `pull_requests: write`, so both can comment.
+  - **the shim passes `MEALPLANNER_INVOKED_AS`** and every core message uses it.
+    After the shim's `exec` the core's `$0` is `lib/comment.sh`, which is not a
+    command anyone ran, so usage text would name a path the user never typed.
+  - nothing here can edit, delete, close or merge — only create. Cleanup stays a
+    manual `gh api` call, which is why granting these unattended is defensible.
 - **`grep` reads a bot identity as a bracket expression.** The agent scripts in
   `scripts/` filter git log output against `meal-planner-coder-claude[bot]`, and
   as a basic regex that trailing `[bot]` is a *character class* — one character
   from `{b,o,t}` — so the pattern never matches the literal author string. A
-  `grep -v` built that way keeps every line, which meant `pr-as-app.sh`'s
+  `grep -v` built that way keeps every line, which meant `lib/open-pr.sh`'s
   "these commits are not authored by the bot" warning fired on every branch
   including ones the bot wrote (PR #34 review). `grep -F` fixes the instance;
   an exact field comparison (`awk -F'\t' '$1 != bot'` over `%ae`) is what the

@@ -11,15 +11,18 @@
 #
 # There is one App per role — currently `coder` and `reviewer` — so every caller
 # has to say which one it is speaking as. `--as` is REQUIRED and has no default:
-# an omitted flag would make the identity depend on ambient environment, and a
-# permission rule could then not name it. Spelled out, a rule grants exactly one
-# identity (`Bash(./scripts/comment-as-app.sh --as coder:*)` leaves the reviewer
-# prompting), which is the same narrowing argument as the fixed endpoint in
-# comment-as-app.sh.
+# minting for whichever App happened to be configured is how an agent ends up
+# speaking as the wrong identity, and the caller always knows which it wants.
+#
+# What a permission rule names is the *shim* that calls this
+# (`Bash(./scripts/coder-comment.sh:*)`), not this file and not a flag — one
+# filename per identity, so a rule cannot grant both. This script is a core:
+# nothing should grant it directly, because minting a token is every capability
+# the App has at once.
 #
 # Usage:
 #   export MEALPLANNER_CODER_APP_ID=123456
-#   GH_TOKEN=$(scripts/app-token.sh --as coder) gh api repos/:owner/:repo/issues/32/comments -f body='…'
+#   GH_TOKEN=$(scripts/lib/app-token.sh --as coder) gh api repos/:owner/:repo/issues/32/comments -f body='…'
 #
 # The token expires in an hour and is not stored anywhere. The private key must
 # live OUTSIDE this repo — it is a credential, and this repo is public.
