@@ -755,6 +755,63 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
   true and spins past a run that finished minutes ago. Poll the plain text
   output (`gh pr checks <n>` prints `pass`/`fail`/`pending` per row) or go
   through `gh api repos/:owner/:repo/commits/<sha>/check-runs`.
+- **One App per role, and the capability is the filename.** `scripts/` holds one
+  script per (identity, capability) pair — `coder-comment.sh`,
+  `coder-open-pr.sh`, `coder-file-issue.sh`, `reviewer-comment.sh`,
+  `reviewer-file-issue.sh` — each a four-line shim over a core in `scripts/lib/`.
+  A permission rule can name a **filename**, so one file per pair means
+  `Bash(./scripts/coder-comment.sh:*)` grants exactly that pair and nothing else.
+  The earlier design put the role in a `--as` flag and required it first, which
+  worked but rested the whole property on **argument order** — an invariant a
+  later "accept the flag anywhere" edit would relax, widening a permission rule
+  with every test still green. A filename cannot drift that way.
+  - **a capability an App lacks has no file.** There is no `reviewer-open-pr.sh`:
+    measured 2026-08-19, the reviewer App is installed `contents: read` and
+    cannot push. Non-existence beats a runtime refusal — no code path, nothing to
+    get wrong — and it is the same argument as not shipping a general `gh api`
+    wrapper. `lib/open-pr.sh` keeps a role check as defence in depth, reachable
+    only by writing a wrong shim. Both Apps are `issues: write` and
+    `pull_requests: write`, so both get comment and file-issue.
+  - **`lib/` is cores, and nothing there should be granted.** `lib/app-token.sh`
+    least of all: minting a token is every capability the App has at once. The
+    cores still take `--as <role>`, now an ordinary parameter rather than a
+    boundary — the shims are the only callers that pass it.
+  - each role reads `MEALPLANNER_<ROLE>_APP_ID` (e.g. `MEALPLANNER_CODER_APP_ID`),
+    resolved by indirection, so there is **no list of valid roles in the code** —
+    the environment defines which Apps exist and an unknown role fails as a
+    missing variable that names itself. `~/.bashrc` exports these, past its
+    line-8 non-interactive `return`, so a non-interactive shell sees none of them.
+  - the **key is found by globbing the role out of the filename**
+    (`meal-planner-<role>-claude.*.pem`), which is what keeping GitHub's download
+    name was always for. `MEALPLANNER_<ROLE>_APP_KEY` is an override, needed only
+    when a rotation leaves two dated keys for one App — a real ambiguity about
+    which is live, so the script stops rather than picking.
+  - **the shim passes `MEALPLANNER_INVOKED_AS`** and every core message uses it.
+    After the shim's `exec` the core's `$0` is `lib/comment.sh`, which is not a
+    command anyone ran, so usage text would name a path the user never typed.
+  - nothing here can edit, delete, close or merge — only create. Cleanup stays a
+    manual `gh api` call, which is why granting these unattended is defensible.
+- **`grep` reads a bot identity as a bracket expression.** The agent scripts in
+  `scripts/` filter git log output against `meal-planner-coder-claude[bot]`, and
+  as a basic regex that trailing `[bot]` is a *character class* — one character
+  from `{b,o,t}` — so the pattern never matches the literal author string. A
+  `grep -v` built that way keeps every line, which meant `lib/open-pr.sh`'s
+  "these commits are not authored by the bot" warning fired on every branch
+  including ones the bot wrote (PR #34 review). `grep -F` fixes the instance;
+  an exact field comparison (`awk -F'\t' '$1 != bot'` over `%ae`) is what the
+  script does now, because it cannot be re-broken by the next metacharacter
+  somebody puts in an identity, and `%ae` is the field GitHub attributes on.
+- **Pushing to an explicit URL leaves no remote-tracking ref**, and
+  `git push --set-upstream <url>` writes that *URL* into `branch.<b>.remote`.
+  So a follow-up `git branch --set-upstream-to=origin/<b>` fails — `origin/<b>`
+  does not exist — and under `|| true` it fails silently, leaving exactly the
+  state it was added to prevent. That branch then sends the next plain
+  `git push`/`git pull` through whatever ambient credential helper the machine
+  has, i.e. as a person, which for the App scripts is the attribution hole they
+  exist to close, reopened one push later. Fetch the tracking ref first
+  (`git fetch origin refs/heads/<b>:refs/remotes/origin/<b>`, through the same
+  credential helper), then set upstream, and **warn on failure** — a fixup that
+  cannot report its own failure is how this survived a verification list.
 - Commit style: imperative subject, wrapped body explaining why, no DB files.
 - **Stage explicit paths; never `git add -A`.** It once swept a
   `mealplanner.db.testbackup-182628` left by manual testing into a commit —
