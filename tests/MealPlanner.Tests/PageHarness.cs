@@ -28,6 +28,7 @@ internal sealed class PageHarness : BunitContext
         Generator = generator;
         Scanner = scanner;
         Recipes = inventory.NewRecipeService();
+        Settings = inventory.NewAiSettingsService();
 
         // Registered as singletons rather than scoped: a BunitContext resolves
         // each page from the same container, and sharing one InventoryService
@@ -39,6 +40,11 @@ internal sealed class PageHarness : BunitContext
         Services.AddSingleton(Options.Create(RecipeOptions));
         Services.AddSingleton<IReceiptScanner>(scanner);
         Services.AddSingleton(Options.Create(ScanOptions));
+        Services.AddSingleton(Settings);
+        // Only Recipe and Scan options were registered before the settings page
+        // existed. Without this every Settings test dies at render with a DI
+        // error that reads like a page bug.
+        Services.AddSingleton(Options.Create(ClassifyOptions));
         Services.AddLogging();
     }
 
@@ -69,6 +75,18 @@ internal sealed class PageHarness : BunitContext
     /// <inheritdoc cref="RecipeOptions"/>
     public ReceiptScanningOptions ScanOptions { get; } = new();
 
+    /// <inheritdoc cref="RecipeOptions"/>
+    public CategorizationOptions ClassifyOptions { get; } = new();
+
+    /// <summary>The same AiSettingsService the settings page injects.</summary>
+    public AiSettingsService Settings { get; }
+
+    /// <summary>
+    /// What the language picker reads out of localStorage. Settable before the
+    /// render; the plan below is registered lazily so a test can change it.
+    /// </summary>
+    public string StoredLanguage { get; set; } = "system";
+
     /// <summary>
     /// A second <see cref="InventoryService"/> over the same database and
     /// notifier: an MCP tool's scope, or another household member's tab. This
@@ -96,6 +114,34 @@ internal sealed class PageHarness : BunitContext
 
     /// <inheritdoc cref="RenderInventory"/>
     public IRenderedComponent<Recipes> RenderRecipes() => Render<Recipes>();
+
+    /// <inheritdoc cref="RenderInventory"/>
+    public IRenderedComponent<Settings> RenderSettings()
+    {
+        // Planned here rather than in the constructor so StoredLanguage can be
+        // set first. Both plans must exist before the render: under Strict mode
+        // an unplanned call throws, and an un-resulted one never completes,
+        // which hangs the handler before Blazor re-renders it.
+        JSInterop.Setup<string>("mealPlannerLang.get").SetResult(StoredLanguage);
+        JSInterop.Setup<string>("mealPlannerTheme.get").SetResult("system");
+
+        // The matcher overload is required: the bare SetupVoid(identifier)
+        // matches only a call with *no* arguments, so every real invocation
+        // would fall through to Strict mode's exception. Which argument arrived
+        // is asserted at the call site instead.
+        JSInterop.SetupVoid("mealPlannerLang.set", _ => true).SetVoidResult();
+        JSInterop.SetupVoid("mealPlannerTheme.set", _ => true).SetVoidResult();
+
+        return Render<Settings>();
+    }
+
+    /// <summary>
+    /// A second settings service over the same file — another tab, or the
+    /// provider clients a later pass will add. Even with no notifier, this is
+    /// how a test proves a write actually landed rather than reading back the
+    /// page's own in-memory drafts.
+    /// </summary>
+    public AiSettingsService OutOfCircuitSettings() => _inventory.NewAiSettingsService();
 
     protected override async ValueTask DisposeAsyncCore()
     {

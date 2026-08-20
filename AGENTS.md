@@ -258,6 +258,69 @@ design: it serves a trusted home LAN.
     recomputed, and clearing would reopen the list under the name just chosen.
     A blank `Value` does clear it, and that is what lets a page empty the box
     and get a fresh list without reaching into the widget.
+- **Settings** — `/settings` (`Components/Pages/Settings.razor`). **Nothing
+  consumes it yet**, and that is the design rather than an unfinished edge: the
+  three `Claude*` services still read `IOptions<T>` from `appsettings.json`, and
+  the page says so in a banner naming all three features, in a per-card *Running
+  today* line, and in the save status. The banner's test says to delete it in the
+  same commit that wires the services up; the per-card line is read off the live
+  `IOptions<T>` so it stays true in the half-wired state the banner cannot
+  describe. `AiSettingsService` (+ `AiCatalog`, `Models/AiSettings.cs`) is the
+  choke point, shaped like `RecipeService` — factory-based DB access, records
+  out, its own clamping, **no retry ladder and no notifier**: the primary key is
+  the enum value so racing writers contend for one row, and nothing ever deletes
+  a row (clearing a key nulls a column), so one catch-and-reread covers the
+  insert race. Model/provider/key are household-wide in SQLite; **language and
+  theme are per-browser in localStorage** (`wwwroot/lang.js`, a sibling of
+  `theme.js` rather than an addition to it) and are the two controls that do
+  *not* wait for the page's single Save. `ThemeToggle` moved off `MainLayout`'s
+  top row onto this page.
+  - **An unreadable enum column is not caught by `Enum.IsDefined` in a service.**
+    EF's `HasConversion<string>()` throws during *materialization*, before any
+    service code runs, so a hand-edited or downgraded database took the whole
+    page down rather than degrading. Two layers now, and they are not
+    interchangeable: `AiSettingsService.GetAsync` filters unknown `Feature` and
+    `Provider` values out **in SQL**, because those say *which* row this is and a
+    model id without the provider it was chosen for means nothing — the row is
+    skipped whole and the feature falls back to its default. `TolerantEnumConverters`
+    is the second layer, for `Effort` and for any *other* query over these tables:
+    it keeps a count or a later report from throwing. A converter body is an
+    expression tree, so the parse has to live in a called method — `out var` will
+    not compile there.
+  - **The provider is inferred from the key's own prefix**, so the keys card is
+    one row rather than one per company. Longest prefix wins (`sk-proj-` has to
+    beat `sk-`), which is a property of the table rather than of an `if` ladder.
+    The guess is always stated in words before it is committed; an unrecognised
+    prefix reveals a dropdown and is **never refused**, because refusing breaks
+    the day a provider changes its prefix. Keys are plaintext in
+    `mealplanner.db` — the honest consequence of a no-auth LAN app. What is
+    guaranteed is that the key never leaves the service: `GetAsync` returns
+    `CredentialStatus`, which **has no key field**, so a page cannot render one
+    by accident. There is deliberately no MCP tool for settings; the control is
+    the absence of the code path, same argument as `reviewer-open-pr.sh` not
+    existing.
+  - **Chips carry a word as well as a shape** (`new` / `replacing` / `clearing`),
+    and a replacing chip shows **both** tails — it is the only warning before an
+    overwrite, the same argument the receipt review makes for its effect badge.
+    `.key-chip` borrows `.pick-chip`'s geometry, `.use-up`'s painted edge and
+    `.exclude`'s dashed border plus strikethrough. Those keep `--bs-link-color`
+    where `.lang-choice.active` must use `--bs-btn-active-color`: a chip and a
+    card sit on the page, an `.active` outline button has a grey fill painted
+    over it where link colour measures 1.04:1. Same split `.pick-chip.use-up`
+    already makes against `.role-choice.active`; don't tidy it away.
+  - **An injected `IOptions<CategorizationOptions>` must not be named
+    `CategorizationOptions`** — the property shadows the type, and a `static`
+    member reading `CategorizationOptions.SectionName` then fails to compile with
+    an error that names the property rather than the collision. It is
+    `ClassifyOptions` for that reason alone.
+  - `AiCatalog` is a **dated snapshot** (model ids, key prefixes, per-provider
+    effort sets). Nothing in it is a whitelist: an id that leaves the list
+    degrades to the free-text "Other…" box with the stored value intact. Verify
+    ids against each provider's live list when editing it — Anthropic's come from
+    the `claude-api` skill, and the Claude 5 family takes **bare ids with no date
+    suffix** (`claude-haiku-4-5` also genuinely *rejects* an effort setting, which
+    is what `SupportsEffort: false` exists for).
+
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
   persists to localStorage. `Components/Layout/ThemeToggle.razor` is a view over
