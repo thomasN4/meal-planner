@@ -75,6 +75,10 @@ internal sealed class InventoryHarness : IAsyncDisposable
     /// <summary>A <see cref="RecipeService"/> over the same database.</summary>
     public RecipeService NewRecipeService() => new(Factory);
 
+    /// <summary>A settings service over the same file — a second tab, or a
+    /// later provider client reading what a page just wrote.</summary>
+    public AiSettingsService NewAiSettingsService() => new(Factory);
+
     /// <summary>
     /// Runs <paramref name="work"/> <paramref name="count"/> times genuinely in
     /// parallel, each on its own thread-pool thread behind a starting gate.

@@ -50,6 +50,16 @@ builder.Services.Configure<ReceiptScanningOptions>(
     builder.Configuration.GetSection(ReceiptScanningOptions.SectionName));
 builder.Services.AddSingleton<IReceiptScanner, ClaudeReceiptScanner>();
 
+// Household-wide AI settings. Scoped with factory-based database access, like
+// InventoryService and RecipeService; no notifier, for the reasons in the class
+// doc.
+//
+// NOTHING CONSUMES THESE YET. The three services above still read their
+// IOptions<T> from appsettings.json, and the settings page says so on screen.
+// Wiring them up is a separate pass, and it is the pass that gets to delete the
+// page's "not yet in effect" banner.
+builder.Services.AddScoped<AiSettingsService>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()
