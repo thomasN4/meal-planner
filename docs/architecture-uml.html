@@ -1,0 +1,1628 @@
+<title>MealPlanner UML</title>
+<!--
+  The structure of this app, drawn: component view, class diagrams, sequence
+  diagrams, and the design patterns each collaboration rests on.
+
+  This is the *artifact source*, not a standalone page. It deliberately carries
+  no doctype and no html/head/body of its own, because the artifact host wraps
+  it in those at publish time and republishing this file updates the existing
+  page in place. The consequence is that the diagrams do not draw when the file
+  is opened straight from disk: the ```mermaid``` blocks are rendered by the
+  host, so a file:// open shows the diagram source in their place.
+
+  One trap if you edit the diagrams. The content of <pre class="mermaid"> is
+  parsed as live HTML before mermaid ever sees it, so anything shaped like a
+  tag is swallowed and never reaches the parser. That is why every stereotype
+  is written &lt;&lt;entity&gt;&gt; rather than with bare angle brackets, and
+  why node labels separate their halves with a middot instead of a <br/>. A
+  bare <br/> or <<entity>> still *renders* -- it just renders wrong, quietly.
+-->
+
+<style>
+  :root {
+    --ground: #f6f8f7;
+    --raised: #eef2f0;
+    --ink: #151e1b;
+    --muted: #5d6b66;
+    --faint: #7f8d88;
+    --hair: #d3dad7;
+    --accent: #0e6b50;
+    --accent-soft: #e0ede7;
+    --clay: #a8502a;
+    --sheet: #e9eeeb;
+    --sheet-ink: #151e1b;
+    --sheet-hair: #c2cdc8;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --measure: 68ch;
+    --plate: 1180px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f1413;
+      --raised: #161d1b;
+      --ink: #e3eae7;
+      --muted: #93a29c;
+      --faint: #7a8983;
+      --hair: #28322f;
+      --accent: #4cbe97;
+      --accent-soft: #16302a;
+      --clay: #e08a5f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0f1413;
+    --raised: #161d1b;
+    --ink: #e3eae7;
+    --muted: #93a29c;
+    --faint: #7a8983;
+    --hair: #28322f;
+    --accent: #4cbe97;
+    --accent-soft: #16302a;
+    --clay: #e08a5f;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--plate);
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  .col {
+    max-width: var(--measure);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* ---------- masthead ---------- */
+
+  header.mast {
+    border-bottom: 1px solid var(--hair);
+    padding: 72px 0 28px;
+    margin-bottom: 48px;
+  }
+
+  .mast-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 280px);
+    gap: 40px;
+    align-items: end;
+  }
+
+  @media (max-width: 720px) {
+    .mast-grid { grid-template-columns: 1fr; gap: 24px; }
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(2rem, 5.5vw, 3.15rem);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.02;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: 1.06rem;
+    color: var(--muted);
+    margin: 0;
+    max-width: 54ch;
+  }
+
+  .stamp {
+    font-family: var(--mono);
+    font-size: 0.685rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--faint);
+    border-top: 1px solid var(--hair);
+    padding-top: 12px;
+    display: grid;
+    gap: 5px;
+  }
+
+  .stamp b { color: var(--ink); font-weight: 600; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  /* ---------- sections ---------- */
+
+  section { margin-bottom: 72px; }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 1.45rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: 0.94rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 34px 0 10px;
+  }
+
+  p { margin: 0 0 16px; }
+
+  .col > p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.845em;
+    background: var(--raised);
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    padding: 0.08em 0.34em;
+    white-space: nowrap;
+  }
+
+  strong { font-weight: 600; }
+
+  em.term {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--accent);
+  }
+
+  a { color: var(--accent); }
+
+  /* ---------- plates ---------- */
+
+  figure.plate {
+    margin: 32px 0 40px;
+  }
+
+  .plate .sheet {
+    background: var(--sheet);
+    border: 1px solid var(--sheet-hair);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .plate-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px 16px;
+    padding: 11px 18px;
+    border-bottom: 1px solid var(--sheet-hair);
+    font-family: var(--mono);
+    font-size: 0.655rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #4c5a55;
+  }
+
+  .plate-head b { color: #10322a; font-weight: 700; }
+
+  .plate-body {
+    overflow-x: auto;
+    padding: 22px 18px 8px;
+  }
+
+  .plate-body pre.mermaid {
+    margin: 0;
+    background: transparent;
+    min-width: 620px;
+  }
+
+  figcaption {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    color: var(--muted);
+    padding: 0;
+    margin: 12px auto 0;
+    max-width: var(--measure);
+  }
+
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- pattern table ---------- */
+
+  .table-scroll { overflow-x: auto; margin: 28px 0 8px; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 720px;
+    font-size: 0.87rem;
+  }
+
+  thead th {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--faint);
+    text-align: left;
+    font-weight: 600;
+    padding: 0 14px 9px;
+    border-bottom: 1px solid var(--ink);
+  }
+
+  tbody td {
+    padding: 14px;
+    border-bottom: 1px solid var(--hair);
+    vertical-align: top;
+    color: var(--muted);
+  }
+
+  tbody td:first-child {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--ink);
+    width: 20%;
+  }
+
+  tbody td.where {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--accent);
+    width: 26%;
+    white-space: normal;
+  }
+
+  tbody tr:hover td { background: var(--raised); }
+
+  /* ---------- notes ---------- */
+
+  .note {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 16px 20px;
+    margin: 24px 0;
+    font-size: 0.94rem;
+  }
+
+  .note p { margin: 0; }
+  .note p + p { margin-top: 10px; }
+
+  .note-label {
+    font-family: var(--mono);
+    font-size: 0.63rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 7px;
+  }
+
+  ul.reasons {
+    list-style: none;
+    padding: 0;
+    margin: 22px 0 0;
+    display: grid;
+    gap: 20px;
+  }
+
+  ul.reasons > li {
+    border-top: 1px solid var(--hair);
+    padding-top: 16px;
+  }
+
+  ul.reasons .head {
+    font-family: var(--mono);
+    font-size: 0.83rem;
+    font-weight: 600;
+    color: var(--ink);
+    display: block;
+    margin-bottom: 5px;
+  }
+
+  ul.reasons .body {
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+
+  hr.rule {
+    border: 0;
+    border-top: 1px solid var(--hair);
+    margin: 0 0 40px;
+  }
+
+  /* ---------- expand control ---------- */
+
+  button.expand {
+    font: inherit;
+    font-size: 0.655rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #10322a;
+    background: transparent;
+    border: 1px solid #b4c0bb;
+    border-radius: 2px;
+    padding: 3px 11px;
+    line-height: 1.7;
+    cursor: pointer;
+    white-space: nowrap;
+    display: none;
+  }
+
+  :root.has-viewer button.expand { display: inline-block; }
+
+  button.expand:hover { background: #dce5e0; border-color: #8fa39b; }
+
+  button.expand:focus-visible {
+    outline: 2px solid #0e6b50;
+    outline-offset: 2px;
+  }
+
+  /* ---------- full-screen plate viewer ---------- */
+
+  dialog.viewer {
+    padding: 0;
+    margin: 0;
+    border: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100dvh;
+    background: var(--ground);
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  dialog.viewer[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  dialog.viewer::backdrop { background: rgba(8, 12, 11, 0.78); }
+
+  /* Fallback when showModal is unavailable: position it ourselves. */
+  dialog.viewer.pinned {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+  }
+
+  .viewer-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 20px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--hair);
+    font-family: var(--mono);
+    font-size: 0.655rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--faint);
+    flex: none;
+  }
+
+  .viewer-id b { color: var(--ink); font-weight: 700; }
+  .viewer-id span { margin-left: 10px; }
+
+  .viewer-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .viewer-controls button {
+    font: inherit;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--raised);
+    border: 1px solid var(--hair);
+    border-radius: 2px;
+    padding: 5px 11px;
+    min-width: 36px;
+    cursor: pointer;
+    line-height: 1.5;
+  }
+
+  .viewer-controls button:hover { border-color: var(--accent); color: var(--accent); }
+
+  .viewer-controls button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .viewer-controls .zoom {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--ink);
+    min-width: 58px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+
+  .viewer-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--sheet);
+    cursor: grab;
+    touch-action: none;
+    overscroll-behavior: contain;
+  }
+
+  .viewer-stage.dragging { cursor: grabbing; }
+
+  .viewer-stage:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .viewer-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+
+  .viewer-hint {
+    flex: none;
+    margin: 0;
+    padding: 10px 18px;
+    border-top: 1px solid var(--hair);
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+  }
+
+  /* A plate body on loan to the viewer drops its page-level constraints. */
+  .plate-body.in-viewer {
+    overflow: visible;
+    padding: 0;
+  }
+
+  .plate-body.in-viewer pre.mermaid { min-width: 0; }
+
+  .plate-gap { background: var(--sheet); }
+
+  footer.end {
+    border-top: 1px solid var(--hair);
+    padding-top: 20px;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="mast-grid">
+    <div>
+      <p class="eyebrow">Structural reference · net10.0 · Blazor Server</p>
+      <h1>MealPlanner UML</h1>
+      <p class="standfirst">Eight plates covering the class structure, the collaborations, and the design patterns each one is standing on — drawn from the code as it is, not from an intended design.</p>
+    </div>
+    <div class="stamp">
+      <div>Scope · <b>app assembly, no tests</b></div>
+      <div>Plates · <b>8</b></div>
+      <div>Patterns catalogued · <b>16</b></div>
+      <div>Drawn · <b>2026-08-20</b></div>
+    </div>
+  </div>
+</header>
+<section>
+  <div class="col">
+    <p class="eyebrow">01 — Orientation</p>
+    <h2>Two ways in, one way down</h2>
+    <p>MealPlanner has two inbound surfaces — Blazor circuits on the LAN, and a loopback-only MCP endpoint a headless Claude drives — and they meet at <code>InventoryService</code>, which is the only thing in the assembly that opens a <code>DbContext</code> for inventory. Everything else in the app is arranged around that single door: a notifier so writes coming in one surface are seen by the other, and three interfaces that keep the parts calling out to a <code>claude -p</code> subprocess substitutable.</p>
+    <p>The rest of the plates take that shape apart. Read plate 1 for where things live, plates 2–5 for what the types are, and plates 6–8 for what actually happens over time.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 1</b> · Component view</span><span>Packages, ports, and the process boundary</span><button type="button" class="expand" aria-label="Open plate 1 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','clusterBkg':'#dfe6e2','clusterBorder':'#b4c0bb','edgeLabelBackground':'#e9eeeb','fontFamily':'monospace','fontSize':'13px'}}}%%
+flowchart TB
+  subgraph UI["Presentation - Blazor circuits, InteractiveServer"]
+    direction LR
+    INV["Inventory.razor"]
+    REC["Recipes.razor"]
+    CB["IngredientCombobox"]
+  end
+
+  subgraph MCPP["Inbound port 2 - /mcp, loopback only"]
+    TOOLS["InventoryTools · list / upsert / remove"]
+  end
+
+  subgraph APP["Application services"]
+    direction LR
+    IS["InventoryService · the choke point"]
+    RS["RecipeService"]
+    CAT["IngredientCategorizer · BackgroundService"]
+    NOT["InventoryChangeNotifier · singleton bus"]
+    MATCH["IngredientMatcher · pure static"]
+  end
+
+  subgraph PORTS["Outbound ports"]
+    direction LR
+    ICL["IIngredientClassifier"]
+    IRG["IRecipeGenerator"]
+    IRS["IReceiptScanner"]
+  end
+
+  subgraph ADAPT["Adapters - one subprocess family"]
+    direction LR
+    ACL["ClaudeIngredientClassifier"]
+    ARG["ClaudeRecipeGenerator"]
+    ARS["ClaudeReceiptScanner"]
+  end
+
+  subgraph DATA["Persistence"]
+    direction LR
+    FAC["IDbContextFactory"]
+    CTX["MealPlannerDbContext"]
+    DBF[("mealplanner.db · SQLite, NOCASE index")]
+  end
+
+  CLI(["claude -p subprocess · stdin / stdout, no tools"])
+
+  INV -->|"reads + writes"| IS
+  INV -->|"scan"| IRS
+  REC -->|"reads"| IS
+  REC -->|"generate"| IRG
+  REC -->|"save + delete"| RS
+  INV -.->|"Suggestions"| CB
+  REC -.->|"Suggestions"| CB
+  CB -.->|"over the page's items list"| MATCH
+  TOOLS -->|"same service, no shortcut"| IS
+
+  IS ==>|"publishes InventoryChange"| NOT
+  NOT -.->|"subscribe"| INV
+  NOT -.->|"subscribe"| REC
+  NOT -.->|"subscribe"| CAT
+  CAT -->|"classify batch"| ICL
+  CAT -->|"SetCategoryAsync onlyIf Other"| IS
+
+  ICL -.->|"implemented by"| ACL
+  IRG -.->|"implemented by"| ARG
+  IRS -.->|"implemented by"| ARS
+  ACL --> CLI
+  ARG --> CLI
+  ARS --> CLI
+
+  IS --> FAC
+  RS --> FAC
+  FAC --> CTX --> DBF
+
+  classDef port fill:#e3efe9,stroke:#0e6b50,stroke-width:1.5px,color:#10322a
+  classDef hub fill:#d9e9e1,stroke:#0e6b50,stroke-width:2px,color:#10322a
+  classDef ext fill:#f2e6de,stroke:#a8502a,color:#5c2a13
+  class ICL,IRG,IRS port
+  class IS,NOT hub
+  class CLI ext
+</pre>
+    </div>
+    </div>
+    <figcaption><b>Solid arrows are calls, dashed are subscriptions or substitutions, doubled is the publish.</b> The one edge worth staring at is <code>InventoryTools → InventoryService</code>: the MCP tools get no privileged path to the database, which is why an out-of-circuit write refreshes the kitchen's open tabs at all.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">02 — Domain</p>
+    <h2>Two tables, and a lot of records that never land</h2>
+    <p>Only <code>InventoryItem</code> and <code>Recipe</code> are entities. Everything else on plate 2 is an immutable record passing through: a proposal from a model, a request from a page, a result on its way back. The split matters because the records carry values that have not been normalized yet — a scanned line is still whatever a model read off a photograph until <code>InventoryService</code> clamps it.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 2</b> · Domain model</span><span>Entities, enums, and transfer records</span><button type="button" class="expand" aria-label="Open plate 2 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','clusterBkg':'#dfe6e2','clusterBorder':'#b4c0bb','edgeLabelBackground':'#e9eeeb','fontFamily':'monospace','fontSize':'13px'}}}%%
+classDiagram
+  direction LR
+
+  class InventoryItem {
+    &lt;&lt;entity&gt;&gt;
+    +int Id
+    +string Name  1..100, NOCASE unique
+    +string Quantity  free text, max 50
+    +IngredientCategory Category
+    +string Notes  max 500, nullable
+    +DateTime UpdatedAt
+  }
+
+  class Recipe {
+    &lt;&lt;entity&gt;&gt;
+    +int Id
+    +string Title  max 100
+    +string Description  max 500
+    +int Minutes
+    +string IngredientsJson
+    +string StepsJson
+    +DateTime CreatedAt
+  }
+
+  class IngredientCategory {
+    &lt;&lt;enumeration&gt;&gt;
+    Produce
+    FreshHerbs
+    DrySeasonings
+    MeatAndSeafood
+    Dairy
+    Grains
+    Canned
+    Frozen
+    Condiments
+    Baking
+    Beverages
+    Snacks
+    Other
+  }
+
+  class MealType {
+    &lt;&lt;enumeration&gt;&gt;
+    Breakfast
+    Lunch
+    Dinner
+    Snack
+    Dessert
+  }
+
+  class IngredientRole {
+    &lt;&lt;enumeration&gt;&gt;
+    UseUp
+    Include
+    Exclude
+  }
+
+  class ClassificationRequest {
+    &lt;&lt;record struct&gt;&gt;
+    +string Name
+    +string Notes
+  }
+
+  class RecipeRequest {
+    &lt;&lt;record&gt;&gt;
+    +MealType MealType
+    +int MaxMinutes
+    +IReadOnlyList~string~ UseUp
+    +IReadOnlyList~string~ Include
+    +IReadOnlyList~string~ Exclude
+    +string Brief  free text, clamped in adapter
+  }
+
+  class RecipeSuggestion {
+    &lt;&lt;record&gt;&gt;
+    +string Title
+    +string Description
+    +int Minutes
+    +IReadOnlyList~RecipeIngredient~ Ingredients
+    +IReadOnlyList~string~ Steps
+  }
+
+  class RecipeIngredient {
+    &lt;&lt;record&gt;&gt;
+    +string Name
+    +string Quantity
+    +bool Have  verified by app, never by model
+  }
+
+  class SavedRecipe {
+    &lt;&lt;record&gt;&gt;
+    +int Id
+    +string Title
+    +IReadOnlyList~SavedIngredient~ Ingredients
+    +IReadOnlyList~string~ Steps
+    +DateTime CreatedAt
+  }
+
+  class ReceiptFile {
+    &lt;&lt;record&gt;&gt;
+    +byte Content  in memory, never a path
+    +string MediaType
+    +string FileName
+    +IsSupportedMediaType(string) bool$
+  }
+
+  class ScannedLine {
+    &lt;&lt;record&gt;&gt;
+    +string Name
+    +string Quantity
+    +bool IsFood  ticks a box, never drops a row
+    +string Department  display only
+  }
+
+  class ScanResult {
+    &lt;&lt;record&gt;&gt;
+    +IReadOnlyList~ScannedLine~ Lines
+    +string Warning  only about missing lines
+  }
+
+  InventoryItem --> IngredientCategory : filed under
+  RecipeRequest --> MealType
+  RecipeRequest ..> IngredientRole : three lists, one per role
+  RecipeSuggestion *-- RecipeIngredient
+  SavedRecipe ..> Recipe : projected from JSON columns
+  ScanResult *-- ScannedLine
+  ScannedLine ..> InventoryItem : proposal, until confirmed
+  ClassificationRequest ..> IngredientCategory : answered with
+</pre>
+    </div>
+    </div>
+    <figcaption><b><code>Quantity</code> is free text on purpose</b> — "half a bottle" is what this household says — which is what makes an upsert a <em>replacement</em> rather than an addition, and is the reason the receipt review exists as a review.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">03 — The choke point</p>
+    <h2>Every mutation answers with a diff</h2>
+    <p>No method on <code>InventoryService</code> returns <code>void</code> or signals a miss with an exception. They all return an <code>InventoryChange</code>, and <code>ChangeKind</code> covers the outcomes an exception would otherwise carry: <code>NotFound</code>, <code>NameTaken</code>, and <code>Unchanged</code>. That is what lets an MCP tool answer a string and a Razor page render a status line off exactly the same call.</p>
+    <p>Three responsibilities sit here and nowhere else: normalizing and clamping input (EF's <code>[MaxLength]</code> is not enforced and SQLite ignores TEXT lengths, so this is the trust boundary), retrying lost write races up to <code>MaxUpsertAttempts</code>, and publishing to the notifier once the write has actually landed.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 3</b> · Inventory core</span><span>Facade, result object, observer</span><button type="button" class="expand" aria-label="Open plate 3 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','clusterBkg':'#dfe6e2','clusterBorder':'#b4c0bb','edgeLabelBackground':'#e9eeeb','fontFamily':'monospace','fontSize':'13px'}}}%%
+classDiagram
+  direction TB
+
+  class InventoryService {
+    &lt;&lt;scoped&gt;&gt;
+    -IDbContextFactory _factory
+    -InventoryChangeNotifier _notifier
+    -MaxNameLength = 100$
+    -MaxQuantityLength = 50$
+    -MaxNotesLength = 500$
+    -MaxUpsertAttempts = 8$
+    +GetAllAsync(ct) List~InventoryItem~
+    +FindAsync(name, ct) InventoryItem
+    +UpsertAsync(name, quantity, category, notes, ct) InventoryChange
+    +SetCategoryAsync(name, category, onlyIf, ct) InventoryChange
+    +UpdateItemAsync(id, name, quantity, category, notes, ct) InventoryChange
+    +RemoveAsync(name, ct) InventoryChange
+    +DeleteAsync(id, ct) void
+    -UpsertOnceAsync(...) InventoryChange
+    -PublishIfMeaningfulAsync(change) Task
+    -NormalizeName / NormalizeQuantity / Clamp
+  }
+
+  class InventoryChange {
+    &lt;&lt;record&gt;&gt;
+    +string Name
+    +ChangeKind Kind
+    +string Before
+    +string After
+    +IngredientCategory Category
+    +IngredientCategory PreviousCategory  init
+    +string PreviousName  init
+    +string PreviousNotes  init
+    +string Notes  init
+    +Describe() string
+  }
+
+  class ChangeKind {
+    &lt;&lt;enumeration&gt;&gt;
+    Created
+    Updated
+    Removed
+    Unchanged
+    NotFound
+    NameTaken
+  }
+
+  class InventoryChangeNotifier {
+    &lt;&lt;singleton&gt;&gt;
+    -Lock _gate
+    -List~FuncOfChangeToTask~ _handlers
+    +Subscribe(handler) void
+    +Unsubscribe(handler) void
+    +PublishAsync(change) Task
+    -GuardedAsync(handler) Task
+  }
+
+  class InventoryTools {
+    &lt;&lt;McpServerToolType&gt;&gt;
+    +ListInventory(svc, category) string$
+    +UpsertItem(svc, name, quantity, category, notes) string$
+    +RemoveItem(svc, name) string$
+  }
+
+  class InventoryPage {
+    &lt;&lt;Inventory.razor&gt;&gt;
+    -List~InventoryItem~ items
+    -int editingId  one row at a time
+    -bool categoryTouched, quantityTouched, notesTouched
+    -List~ScanRow~ scanRows  never in the DOM
+    +OnInventoryChangedAsync(change) Task
+    -SyncToName() void
+    -RefreshAsync() Task
+  }
+
+  class RecipesPage {
+    &lt;&lt;Recipes.razor&gt;&gt;
+    -Dictionary~string_IngredientRole~ roles
+    -IReadOnlyList~RecipeSuggestion~ suggestions
+    -int confirmingDeleteId
+    +OnInventoryChangedAsync(change) Task
+  }
+
+  class MealPlannerDbContext {
+    &lt;&lt;DbContext&gt;&gt;
+    +DbSet~InventoryItem~ InventoryItems
+    +DbSet~Recipe~ Recipes
+    +OnModelCreating(b) void
+  }
+
+  InventoryService ..> InventoryChange : returns from every mutation
+  InventoryChange --> ChangeKind
+  InventoryService --> InventoryChangeNotifier : PublishAsync, awaited
+  InventoryService ..> MealPlannerDbContext : one per unit of work
+  InventoryTools --> InventoryService : catches ArgumentException
+  InventoryPage --> InventoryService
+  InventoryChangeNotifier <.. InventoryPage : Subscribe, method group
+  InventoryChangeNotifier <.. RecipesPage : Subscribe, method group
+</pre>
+    </div>
+    </div>
+    <figcaption><b><code>Describe()</code> composes one clause per field that moved.</b> It was twice written as a ladder picking a single axis, and both times a combination with no branch rendered as some other field's non-change — a note-only save reporting <code>3 bags → 3 bags</code>. Composition is the shape that survives a new field.</figcaption>
+  </figure>
+
+  <div class="col">
+    <div class="note">
+      <span class="note-label">Why the retry is eight and not one</span>
+      <p>An upsert is read-then-write against a case-insensitive unique index, so two writers on one name race. Every losing attempt flips branch — insert becomes update, update becomes insert — so a single retry is exhausted by three concurrent writers. Household members plus a headless Claude on the same names is this app's normal case, not its edge case.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">04 — Ports and adapters</p>
+    <h2>Three interfaces that keep a subprocess out of the tests</h2>
+    <p>Each AI-backed feature is one interface and one implementation that shells out to <code>claude -p</code>. The interfaces exist for a specific, cashed-in reason: the test suite never spawns the CLI. Fakes stand in for the ports, and what is genuinely worth testing at the process boundary — <code>BuildPayload</code> for the stdin, <code>ParseResults</code> / <code>ParseScan</code> / <code>ParseRecipes</code> for the stdout — is <code>internal static</code> and pure.</p>
+    <p>All three implementations carry the same private shape: <code>RunAsync</code> → <code>KillAndDrainAsync</code> → <code>Kill</code>. The duplication is deliberate rather than factored into a base class, and the three bodies are meant to read identically.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 4</b> · Outbound ports</span><span>Strategy at the DI seam, template shape by hand</span><button type="button" class="expand" aria-label="Open plate 4 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','clusterBkg':'#dfe6e2','clusterBorder':'#b4c0bb','edgeLabelBackground':'#e9eeeb','fontFamily':'monospace','fontSize':'13px'}}}%%
+classDiagram
+  direction TB
+
+  class IIngredientClassifier {
+    &lt;&lt;interface&gt;&gt;
+    +ClassifyAsync(requests, ct) IReadOnlyList~IngredientCategory~
+  }
+  class IRecipeGenerator {
+    &lt;&lt;interface&gt;&gt;
+    +GenerateAsync(request, inventory, ct) IReadOnlyList~RecipeSuggestion~
+  }
+  class IReceiptScanner {
+    &lt;&lt;interface&gt;&gt;
+    +ScanAsync(file, ct) ScanResult
+  }
+
+  class ClaudeIngredientClassifier {
+    &lt;&lt;singleton&gt;&gt;
+    -CategorizationOptions _options
+    -ResponseSchema$
+    -SystemPrompt$
+    +BuildPayload(requests) string$
+    +ParseResults(output, count, out problem) IngredientCategory$
+    -RunAsync(payload, ct) string
+    -KillAndDrainAsync(process, stdout, stderr) Task
+  }
+
+  class ClaudeRecipeGenerator {
+    &lt;&lt;singleton&gt;&gt;
+    -RecipeGenerationOptions _options
+    +BuildPayload(request, inventory) string$
+    +ParseRecipes(output, inventoryNames, out problem, excluded) IReadOnlyList~RecipeSuggestion~$
+    -RunAsync(payload, ct) string
+    -KillAndDrainAsync(...) Task
+  }
+
+  class ClaudeReceiptScanner {
+    &lt;&lt;singleton&gt;&gt;
+    -ReceiptScanningOptions _options
+    +BuildPayload(file) string$
+    +ParseScan(output, maxLines, out problem) IReadOnlyList~ScannedLine~$
+    -TryFindResult(output, out result, out problem) bool$
+    -RunAsync(payload, ct) string
+    -KillAndDrainAsync(...) Task
+  }
+
+  class CategorizationOptions {
+    &lt;&lt;options&gt;&gt;
+    +bool Enabled = true
+    +string Effort = "low"
+    +int TimeoutSeconds = 90
+    +int MaxBatchSize = 20
+    +int BatchWindowMilliseconds = 400
+    +int CacheSize = 500
+  }
+  class RecipeGenerationOptions {
+    &lt;&lt;options&gt;&gt;
+    +bool Enabled = true
+    +string Effort = "medium"
+    +int TimeoutSeconds = 180
+  }
+  class ReceiptScanningOptions {
+    &lt;&lt;options&gt;&gt;
+    +bool Enabled = true
+    +string Effort = "low"
+    +int TimeoutSeconds = 120
+    +int MaxBytes = 5 MB
+    +int MaxLines = 60, 0 means no ceiling
+  }
+
+  class ClaudeCli {
+    &lt;&lt;external process&gt;&gt;
+    flag json-schema : pins the answer shape
+    flag setting-sources empty : no AGENTS.md in the prompt
+    flag strict-mcp-config : never attaches our own mcp
+    flag no-session-persistence
+    ArgumentList, never a joined string
+  }
+
+  IIngredientClassifier <|.. ClaudeIngredientClassifier
+  IRecipeGenerator <|.. ClaudeRecipeGenerator
+  IReceiptScanner <|.. ClaudeReceiptScanner
+
+  ClaudeIngredientClassifier --> CategorizationOptions
+  ClaudeRecipeGenerator --> RecipeGenerationOptions
+  ClaudeReceiptScanner --> ReceiptScanningOptions
+
+  ClaudeIngredientClassifier ..> ClaudeCli : stdin batch of name+note
+  ClaudeRecipeGenerator ..> ClaudeCli : stdin inventory snapshot
+  ClaudeReceiptScanner ..> ClaudeCli : stdin base64 image block
+</pre>
+    </div>
+    </div>
+    <figcaption><b>None of the three may throw.</b> A failed classification means "everything stays in Other"; a failed scan means "nothing to review"; a failed generation means an empty list. Only the caller's own <code>OperationCanceledException</code> is let out — which is what keeps a nice-to-have from becoming a faulted background loop or a dead page.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">05 — The background pipeline</p>
+    <h2>Classification deliberately does not live in the service</h2>
+    <p>A classification costs about three seconds and <code>InventoryService</code> sits on the path of every write, so the categorizer subscribes to the notifier instead of being called by the writer. Items appear in <code>Other</code> and move a moment later — and because that move is itself a write, it publishes like any other and open pages refresh themselves.</p>
+    <p>Structurally it is a producer–consumer pipeline: the notifier handler is the producer and returns immediately without awaiting anything, an unbounded single-reader <code>Channel</code> is the buffer, and the <code>ExecuteAsync</code> loop is the consumer. The batch window exists because eight names cost the same as one — spawning the process dominates.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 5</b> · Categorization pipeline</span><span>Observer feeding a producer–consumer queue</span><button type="button" class="expand" aria-label="Open plate 5 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','clusterBkg':'#dfe6e2','clusterBorder':'#b4c0bb','edgeLabelBackground':'#e9eeeb','fontFamily':'monospace','fontSize':'13px'}}}%%
+flowchart LR
+  W["any writer · page, MCP tool, scan confirm"] -->|"UpsertAsync"| S["InventoryService"]
+  S -->|"awaited publish"| N["InventoryChangeNotifier"]
+  N -->|"OnInventoryChangedAsync"| G{"Created, and still in Other?"}
+  G -->|"no"| X["ignored · a hand-filed row stays put"]
+  G -->|"yes"| Q[["Channel of ClassificationRequest, unbounded single reader"]]
+  Q --> B["CollectBatchAsync · 400 ms window, max 20"]
+  B --> C{"in cache? · key = name + note"}
+  C -->|"hit"| A
+  C -->|"miss"| CL["IIngredientClassifier · one subprocess per batch"]
+  CL -->|"results matched by INDEX, never by name"| A["ApplyAsync"]
+  A -->|"SetCategoryAsync onlyIf: Other"| S2["InventoryService · built per batch via Func"]
+  S2 -->|"second publish"| N2["notifier again"]
+  N2 -.->|"pages re-render"| UI["open circuits"]
+
+  classDef gate fill:#f2e6de,stroke:#a8502a,color:#5c2a13
+  classDef hub fill:#d9e9e1,stroke:#0e6b50,stroke-width:2px,color:#10322a
+  class G,C gate
+  class N,N2,Q hub
+</pre>
+    </div>
+    </div>
+    <figcaption><b>Two guards do most of the work here.</b> The <code>Created + Other</code> filter is what stops a hand-filed row being dragged back out, and <code>onlyIf: Other</code> is what stops a stale classification overwriting a household member who filed it themselves while the subprocess was running. The cache is keyed on name <em>and</em> note, because the note is allowed to move the answer.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+<section>
+  <div class="col">
+    <p class="eyebrow">06 — Collaboration</p>
+    <h2>What actually happens, in order</h2>
+    <p>The static plates hide the two things this app's design is mostly about: that a write is not finished until every open circuit has been told, and that nothing a model says reaches the database without a person confirming it. Plates 6 to 8 are the three flows where that shows.</p>
+  </div>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 6</b> · Add an item</span><span>Write, fan-out, and the second write that follows</span><button type="button" class="expand" aria-label="Open plate 6 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','actorBkg':'#fbfcfb','actorBorder':'#7e8d87','actorTextColor':'#151e1b','signalColor':'#5d6b66','signalTextColor':'#151e1b','noteBkgColor':'#e0ede7','noteBorderColor':'#0e6b50','noteTextColor':'#10322a','labelBoxBkgColor':'#dfe6e2','labelTextColor':'#151e1b','activationBkgColor':'#d6e4dd','fontFamily':'monospace','fontSize':'13px'}}}%%
+sequenceDiagram
+  autonumber
+  actor H as Household
+  participant P as Inventory.razor
+  participant S as InventoryService
+  participant DB as SQLite
+  participant N as Notifier
+  participant C as IngredientCategorizer
+  participant CL as ClaudeIngredientClassifier
+  participant T as Another open tab
+
+  H->>P: types a name, presses Add
+  P->>S: UpsertAsync name, quantity, notes
+  S->>S: normalize, trim, clamp 100 / 50 / 500
+  S->>DB: read by NOCASE name, then insert
+  DB-->>S: row created
+  S->>N: PublishAsync Created, Other
+  par concurrent fan-out, each handler guarded
+    N->>P: OnInventoryChanged
+    P->>S: RefreshAsync, re-render
+  and
+    N->>T: OnInventoryChanged
+    T->>S: RefreshAsync, re-render
+  and
+    N->>C: queue, returns at once
+  end
+  N-->>S: all handlers awaited
+  S-->>P: InventoryChange, Describe fills the status line
+  Note over C,CL: 400 ms batch window, then one subprocess
+  C->>CL: ClassifyAsync batch of name plus note
+  CL-->>C: categories, positional
+  C->>S: SetCategoryAsync onlyIf Other
+  S->>N: PublishAsync Updated, PreviousCategory set
+  N->>P: row moves group, accordion opens the destination
+</pre>
+    </div>
+    </div>
+    <figcaption><b>Step 9 is why the page has no <code>RefreshAsync()</code> after its own write.</b> The publish is awaited, so by the time the handler that wrote gets its result back, its own subscription has already refreshed it — adding a local refresh reads the database twice.</figcaption>
+  </figure>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 7</b> · Scan a receipt</span><span>Nothing is written until someone confirms</span><button type="button" class="expand" aria-label="Open plate 7 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','actorBkg':'#fbfcfb','actorBorder':'#7e8d87','actorTextColor':'#151e1b','signalColor':'#5d6b66','signalTextColor':'#151e1b','noteBkgColor':'#e0ede7','noteBorderColor':'#0e6b50','noteTextColor':'#10322a','labelBoxBkgColor':'#dfe6e2','labelTextColor':'#151e1b','activationBkgColor':'#d6e4dd','fontFamily':'monospace','fontSize':'13px'}}}%%
+sequenceDiagram
+  autonumber
+  actor H as Household
+  participant P as Inventory.razor
+  participant SC as ClaudeReceiptScanner
+  participant CLI as claude -p
+  participant M as IngredientMatcher
+  participant S as InventoryService
+
+  H->>P: uploads a photo, InputFile keyed on a counter
+  P->>P: check media type and MaxBytes
+  P->>SC: ScanAsync ReceiptFile, bytes in memory
+  SC->>CLI: stdin base64 block, stream-json in and out
+  CLI-->>SC: result line, products array
+  SC->>SC: ParseScan, clamp, apply MaxLines
+  SC-->>P: ScanResult Lines plus Warning about dropped lines
+  alt cancel was clicked while in flight
+    P->>P: token fired OR IsCancellationRequested after the await
+    P-->>H: review is discarded, both checks needed
+  else
+    loop per line, derived on every render
+      P->>M: ExactMatch then NearMatch against items
+      M-->>P: Replaces / Looks like / No change / New
+    end
+    P->>P: unticks non-food, duplicates, and near matches
+    P-->>H: review list, badges, editable names
+  end
+  H->>P: adjusts, then Confirm
+  loop one row at a time, each publishes
+    P->>S: UpsertAsync name, quantity, category null
+    S-->>P: Created / Updated / Unchanged
+    P->>P: prune written rows from scanRows
+  end
+  P-->>H: DescribeScan, one clause per non-zero counter
+</pre>
+    </div>
+    </div>
+    <figcaption><b>Category is passed as <code>null</code> on purpose</b> — a new row lands in <code>Other</code> and an existing row keeps its category, so the categorizer stays the one place classification happens, and a scan's rows arrive together, which is exactly the batch it wants.</figcaption>
+  </figure>
+
+  <figure class="plate">
+    <div class="sheet">
+    <div class="plate-head"><span><b>Plate 8</b> · Generate recipes</span><span>The model proposes, the app verifies</span><button type="button" class="expand" aria-label="Open plate 8 in the full-screen viewer">Expand</button></div>
+    <div class="plate-body">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'background':'#e9eeeb','primaryColor':'#fbfcfb','primaryBorderColor':'#7e8d87','primaryTextColor':'#151e1b','lineColor':'#5d6b66','textColor':'#151e1b','actorBkg':'#fbfcfb','actorBorder':'#7e8d87','actorTextColor':'#151e1b','signalColor':'#5d6b66','signalTextColor':'#151e1b','noteBkgColor':'#e0ede7','noteBorderColor':'#0e6b50','noteTextColor':'#10322a','labelBoxBkgColor':'#dfe6e2','labelTextColor':'#151e1b','activationBkgColor':'#d6e4dd','fontFamily':'monospace','fontSize':'13px'}}}%%
+sequenceDiagram
+  autonumber
+  actor H as Household
+  participant P as Recipes.razor
+  participant S as InventoryService
+  participant G as ClaudeRecipeGenerator
+  participant CLI as claude -p
+  participant R as RecipeService
+
+  H->>P: picks items into UseUp / Include / Exclude
+  Note over P: one name to one role, a single dictionary
+  H->>P: meal type, time budget, free-text brief, Generate
+  P->>S: GetAllAsync, one snapshot
+  S-->>P: inventory
+  P->>G: GenerateAsync request plus the same snapshot
+  Note over G: brief clamped here, not at the textarea
+  G->>CLI: stdin prompt with the inventory embedded, never our /mcp
+  CLI-->>G: 2 to 3 recipes, each ingredient claiming an inventoryName
+  G->>G: ParseRecipes verifies every claim against real names
+  G->>G: drops a recipe WHOLE if a claim names an excluded row
+  G-->>P: RecipeSuggestion list with Have computed by us
+  P-->>H: cards, have and missing split
+  H->>P: Save one
+  P->>R: SaveAsync, JSON columns, clamped
+  R-->>P: SavedRecipe
+  Note over P,R: no retry loop, no notifier publish, deliberately
+</pre>
+    </div>
+    </div>
+    <figcaption><b>The snapshot is taken once and used twice</b> — it drives the prompt and the have/missing verification — so the generator needs no database access at all, and the two can never disagree about what the kitchen held.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">07 — Catalogue</p>
+    <h2>The patterns, and what each one is buying</h2>
+    <p>Sixteen, listed with the concrete thing that would break without them rather than the textbook motivation.</p>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Pattern</th><th>Where it lives</th><th>What it is buying here</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Facade / choke point</td>
+          <td class="where">InventoryService</td>
+          <td>One trust boundary for normalization and clamping, since <code>[MaxLength]</code> is not enforced by EF and SQLite ignores TEXT lengths. A page or tool touching the DbContext directly would bypass all of it.</td>
+        </tr>
+        <tr>
+          <td>Observer</td>
+          <td class="where">InventoryChangeNotifier</td>
+          <td>A write arriving over MCP refreshes the kitchen's open tabs without a reload. Handlers are <code>Func&lt;InventoryChange, Task&gt;</code> so subscribers can await real work, and are subscribed as method groups because <code>Unsubscribe</code> matches on delegate equality.</td>
+        </tr>
+        <tr>
+          <td>Guarded concurrent fan-out</td>
+          <td class="where">PublishAsync + GuardedAsync</td>
+          <td>A per-handler try/catch inside a <code>Task.WhenAll</code>. One torn-down circuit cannot starve the rest, and no task ever faults, so several dead subscribers cannot collapse into one <code>AggregateException</code> that hides all but the first.</td>
+        </tr>
+        <tr>
+          <td>Result object</td>
+          <td class="where">InventoryChange, ChangeKind</td>
+          <td>Outcomes an exception would otherwise carry — <code>NotFound</code>, <code>NameTaken</code>, <code>Unchanged</code> — travel as data, so an MCP tool returns a sentence and a page renders a status line from the identical call.</td>
+        </tr>
+        <tr>
+          <td>Ports and adapters</td>
+          <td class="where">IIngredientClassifier, IRecipeGenerator, IReceiptScanner</td>
+          <td>The suite never spawns the CLI. Fakes stand at the seam; the parsing and payload-building either side of the process boundary are pure static functions tested directly.</td>
+        </tr>
+        <tr>
+          <td>Strategy</td>
+          <td class="where">Program.cs registrations</td>
+          <td>The same three seams read from the DI angle: one line swaps the implementation, and <code>Enabled: false</code> in config switches each feature off whole.</td>
+        </tr>
+        <tr>
+          <td>Producer–consumer</td>
+          <td class="where">IngredientCategorizer channel</td>
+          <td>Keeps a three-second call off the path of every write. The notifier handler queues and returns at once, because every writer awaits the publish and anything slow there is a frozen Add button.</td>
+        </tr>
+        <tr>
+          <td>Batching window</td>
+          <td class="where">CollectBatchAsync</td>
+          <td>Eight names cost the same as one — process spawn dominates — so a 400 ms window collects whatever arrives together, which is exactly the shape a confirmed receipt produces.</td>
+        </tr>
+        <tr>
+          <td>Factory</td>
+          <td class="where">IDbContextFactory, Func&lt;InventoryService&gt;</td>
+          <td>A context per unit of work; and a singleton-registered factory that lets the singleton <code>BackgroundService</code> build a service per batch without capturing a scoped dependency.</td>
+        </tr>
+        <tr>
+          <td>Optimistic concurrency, bounded retry</td>
+          <td class="where">UpsertOnceAsync loop</td>
+          <td>Read-then-write against a NOCASE unique index races. Every losing attempt flips branch, so the ceiling is eight rather than one — three concurrent writers on one name would exhaust a single retry and throw at the caller.</td>
+        </tr>
+        <tr>
+          <td>Options</td>
+          <td class="where">Three *Options classes</td>
+          <td>Model, effort, timeout and ceilings live in <code>appsettings.json</code>. The divergences are meaningful: <code>medium</code> effort and 180 s for recipes against <code>low</code> and 90 s for classification.</td>
+        </tr>
+        <tr>
+          <td>Template shape, uninherited</td>
+          <td class="where">RunAsync / KillAndDrainAsync / Kill</td>
+          <td>Three near-identical private methods rather than a base class. A broken pipe has to kill the child — disposing a handle does not — so every failure path funnels through one drain, and a fix landing in one body belongs in all three.</td>
+        </tr>
+        <tr>
+          <td>Adapter, protocol side</td>
+          <td class="where">InventoryTools</td>
+          <td>Turns string-in / string-out MCP calls into service calls, catching the <code>ArgumentException</code> a UI guards against and answering a message instead.</td>
+        </tr>
+        <tr>
+          <td>Pure function over held state</td>
+          <td class="where">IngredientMatcher</td>
+          <td>Static, no DI, no DbContext — a view over the <code>items</code> list the page already holds, not a second way into the database. Exact match autofills; near match only suggests.</td>
+        </tr>
+        <tr>
+          <td>Parameterized component</td>
+          <td class="where">IngredientCombobox</td>
+          <td>Owns the widget — listbox, highlight, aria, blur dismissal. Each page owns what a match <em>means</em>. Ids derive from the <code>Id</code> parameter, which is the whole reason two can share a page.</td>
+        </tr>
+        <tr>
+          <td>Presentation model</td>
+          <td class="where">Row editor, receipt review</td>
+          <td>Draft state lives in <code>@code</code> fields, never the DOM: a refresh from any writer replaces <code>items</code>, and a row whose category moved is re-keyed under another group and torn down. Focus is lost there; typed text must not be.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section>
+  <div class="col">
+    <p class="eyebrow">08 — Negative space</p>
+    <h2>Patterns the code refuses on purpose</h2>
+    <p>The absences are as load-bearing as the presences, and each one has been argued rather than overlooked.</p>
+
+    <ul class="reasons">
+      <li>
+        <span class="head">No repository per entity, no unit-of-work abstraction</span>
+        <span class="body"><code>IDbContextFactory</code> is the whole of it. A repository layer over two tables in a one-household app would add an indirection that <code>InventoryService</code> already provides — and the service is where normalization and retry have to live anyway.</span>
+      </li>
+      <li>
+        <span class="head">No retry loop and no publish in RecipeService</span>
+        <span class="body">Symmetry with <code>InventoryService</code> would be wrong. Recipes have no natural key and no unique index, so every save is a fresh insert that cannot collide, and no out-of-circuit writer touches them — the page that saved refreshes itself.</span>
+      </li>
+      <li>
+        <span class="head">No base class for the three Claude adapters</span>
+        <span class="body">Their flag sets diverge where measurement said they should, and the shared private shape is small. The bodies are kept readable side by side instead of hoisted into an abstraction that would have to be parameterized on every difference.</span>
+      </li>
+      <li>
+        <span class="head">No <code>bool includeExactMatch</code> on Suggest</span>
+        <span class="body">Inventory excludes the exact match because a row in that list can be arrowed onto, which would turn Enter from "add" into "fill". Recipes wants it and prepends <code>ExactMatch</code> itself. A flag would encode which page is asking into a pure function.</span>
+      </li>
+      <li>
+        <span class="head">No classification inside the write path</span>
+        <span class="body">The obvious place for auto-categorization is <code>UpsertAsync</code>. It is not there because that method is on the path of every write and a classification takes seconds — the observer subscription is the whole reason the Add button stays responsive.</span>
+      </li>
+      <li>
+        <span class="head">No chat surface on /recipes</span>
+        <span class="body">Knobs and cards. The generator is reached through a request record with an enum, three role lists and one clamped free-text brief — a shape a schema can pin — rather than an open conversation.</span>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<footer class="end">
+  <div class="col">Drawn from the MealPlanner assembly at branch <code>claude/uml-diagram-design-patterns-f00244</code>. Tests excluded by scope. Every rationale here is the one recorded in the code, not inferred from it.</div>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var MIN = 0.15, MAX = 8, PAD = 28;
+
+  var dlg, stage, canvas, zoomLabel, titleEl, subEl;
+  var view = { x: 0, y: 0, k: 1 };
+  var natural = { w: 0, h: 0 };
+  var active = null;                 // what is on loan to the viewer
+  var pointers = new Map();
+  var pinchDist = 0;
+
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function apply() {
+    canvas.style.transform =
+      'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')';
+    zoomLabel.textContent = Math.round(view.k * 100) + '%';
+  }
+
+  function zoomAt(cx, cy, factor) {
+    var next = clamp(view.k * factor, MIN, MAX);
+    var ratio = next / view.k;
+    view.x = cx - (cx - view.x) * ratio;
+    view.y = cy - (cy - view.y) * ratio;
+    view.k = next;
+    apply();
+  }
+
+  function zoomCentre(factor) {
+    var r = stage.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, factor);
+  }
+
+  // Size the diagram to its own coordinate system, so the scale we apply is
+  // the only thing deciding how big it is. Mermaid ships the SVG at 100% width
+  // with a max-width, which would otherwise fight the transform.
+  function measure(svg) {
+    var box = svg.viewBox && svg.viewBox.baseVal;
+    if (box && box.width && box.height) return { w: box.width, h: box.height };
+    var rect = svg.getBoundingClientRect();
+    return { w: rect.width || 800, h: rect.height || 600 };
+  }
+
+  function fit() {
+    var r = stage.getBoundingClientRect();
+    if (!natural.w || !natural.h) {
+      view = { x: 0, y: 0, k: 1 };
+      apply();
+      return;
+    }
+    var k = clamp(
+      Math.min((r.width - PAD * 2) / natural.w, (r.height - PAD * 2) / natural.h),
+      MIN, MAX);
+    view.k = k;
+    view.x = (r.width - natural.w * k) / 2;
+    view.y = (r.height - natural.h * k) / 2;
+    apply();
+  }
+
+  function open(figure, trigger) {
+    var body = figure.querySelector('.plate-body');
+    var sheet = figure.querySelector('.sheet');
+    if (!body || !sheet) return;
+
+    // Hold the page's height while the body is away, so closing lands the
+    // reader back where they were rather than a screenful further up.
+    var gap = document.createElement('div');
+    gap.className = 'plate-gap';
+    gap.style.height = body.offsetHeight + 'px';
+
+    var svg = body.querySelector('svg');
+    var svgStyle = svg ? svg.getAttribute('style') : null;
+
+    active = { sheet: sheet, body: body, gap: gap, svg: svg, svgStyle: svgStyle, trigger: trigger };
+
+    sheet.replaceChild(gap, body);
+    body.classList.add('in-viewer');
+    canvas.appendChild(body);
+
+    if (svg) {
+      natural = measure(svg);
+      svg.style.width = natural.w + 'px';
+      svg.style.height = natural.h + 'px';
+      svg.style.maxWidth = 'none';
+    } else {
+      natural = { w: 0, h: 0 };
+    }
+
+    var head = figure.querySelector('.plate-head');
+    var spans = head ? head.querySelectorAll('span') : [];
+    titleEl.textContent = spans[0] ? spans[0].textContent : 'Plate';
+    subEl.textContent = spans[1] ? spans[1].textContent : '';
+
+    if (typeof dlg.showModal === 'function') {
+      dlg.showModal();
+    } else {
+      dlg.classList.add('pinned');
+      dlg.setAttribute('open', '');
+    }
+    fit();
+    stage.focus();
+  }
+
+  function restore() {
+    if (!active) return;
+    var a = active;
+    active = null;
+    a.body.classList.remove('in-viewer');
+    if (a.svg) {
+      if (a.svgStyle === null) a.svg.removeAttribute('style');
+      else a.svg.setAttribute('style', a.svgStyle);
+    }
+    if (a.gap.parentNode) a.gap.parentNode.replaceChild(a.body, a.gap);
+    pointers.clear();
+    pinchDist = 0;
+    stage.classList.remove('dragging');
+    if (a.trigger) a.trigger.focus();
+  }
+
+  function close() {
+    if (typeof dlg.close === 'function' && dlg.open && !dlg.classList.contains('pinned')) {
+      dlg.close();                  // fires 'close', which restores
+    } else {
+      dlg.removeAttribute('open');
+      dlg.classList.remove('pinned');
+      restore();
+    }
+  }
+
+  function build() {
+    dlg = document.createElement('dialog');
+    dlg.className = 'viewer';
+    dlg.innerHTML =
+      '<div class="viewer-bar">' +
+        '<div class="viewer-id"><b></b><span></span></div>' +
+        '<div class="viewer-controls">' +
+          '<button type="button" data-act="out" aria-label="Zoom out">&minus;</button>' +
+          '<span class="zoom">100%</span>' +
+          '<button type="button" data-act="in" aria-label="Zoom in">+</button>' +
+          '<button type="button" data-act="fit">Fit</button>' +
+          '<button type="button" data-act="close" aria-label="Close the viewer">Close</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="viewer-stage" tabindex="0" role="group" ' +
+           'aria-label="Diagram viewer. Drag to pan, plus and minus to zoom, 0 to fit.">' +
+        '<div class="viewer-canvas"></div>' +
+      '</div>' +
+      '<p class="viewer-hint">Drag to pan &middot; scroll to move &middot; ' +
+        'ctrl or cmd + scroll to zoom &middot; keys: + &minus; 0 and arrows &middot; Esc closes</p>';
+
+    document.body.appendChild(dlg);
+
+    stage = dlg.querySelector('.viewer-stage');
+    canvas = dlg.querySelector('.viewer-canvas');
+    zoomLabel = dlg.querySelector('.zoom');
+    titleEl = dlg.querySelector('.viewer-id b');
+    subEl = dlg.querySelector('.viewer-id span');
+
+    dlg.addEventListener('close', restore);
+
+    dlg.querySelector('.viewer-controls').addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) return;
+      var act = btn.getAttribute('data-act');
+      if (act === 'in') zoomCentre(1.25);
+      else if (act === 'out') zoomCentre(1 / 1.25);
+      else if (act === 'fit') fit();
+      else if (act === 'close') close();
+    });
+
+    // Plain scroll pans in both axes — that is what a long diagram wants.
+    // Ctrl/cmd + scroll (and a trackpad pinch, which arrives as the same) zooms
+    // about the pointer, so the thing under the cursor stays under it.
+    stage.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? stage.clientHeight : 1);
+      var dx = e.deltaX * unit, dy = e.deltaY * unit;
+      if (e.ctrlKey || e.metaKey) {
+        var r = stage.getBoundingClientRect();
+        zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * 0.0022));
+      } else {
+        view.x -= dx;
+        view.y -= dy;
+        apply();
+      }
+    }, { passive: false });
+
+    stage.addEventListener('pointerdown', function (e) {
+      stage.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) pinchDist = spread();
+      stage.classList.add('dragging');
+    });
+
+    stage.addEventListener('pointermove', function (e) {
+      var prev = pointers.get(e.pointerId);
+      if (!prev) return;
+      var now = { x: e.clientX, y: e.clientY };
+      pointers.set(e.pointerId, now);
+      if (pointers.size === 1) {
+        view.x += now.x - prev.x;
+        view.y += now.y - prev.y;
+        apply();
+      } else if (pointers.size === 2) {
+        var d = spread();
+        if (pinchDist && d) {
+          var r = stage.getBoundingClientRect();
+          var m = midpoint();
+          zoomAt(m.x - r.left, m.y - r.top, d / pinchDist);
+        }
+        pinchDist = d;
+      }
+    });
+
+    function release(e) {
+      pointers.delete(e.pointerId);
+      pinchDist = pointers.size === 2 ? spread() : 0;
+      if (!pointers.size) stage.classList.remove('dragging');
+    }
+    stage.addEventListener('pointerup', release);
+    stage.addEventListener('pointercancel', release);
+
+    function spread() {
+      var a = Array.from(pointers.values());
+      if (a.length < 2) return 0;
+      return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    }
+    function midpoint() {
+      var a = Array.from(pointers.values());
+      return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 };
+    }
+
+    stage.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 240 : 80;
+      var k = e.key;
+      if (k === '+' || k === '=') { zoomCentre(1.25); }
+      else if (k === '-' || k === '_') { zoomCentre(1 / 1.25); }
+      else if (k === '0') { fit(); }
+      else if (k === 'ArrowLeft') { view.x += step; apply(); }
+      else if (k === 'ArrowRight') { view.x -= step; apply(); }
+      else if (k === 'ArrowUp') { view.y += step; apply(); }
+      else if (k === 'ArrowDown') { view.y -= step; apply(); }
+      else return;
+      e.preventDefault();
+    });
+
+    // Esc is free inside a modal dialog; the fallback path needs it spelled out.
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && active && dlg.classList.contains('pinned')) close();
+    });
+  }
+
+  function init() {
+    build();
+    document.documentElement.classList.add('has-viewer');
+    var plates = document.querySelectorAll('figure.plate');
+    for (var i = 0; i < plates.length; i++) {
+      (function (figure) {
+        var btn = figure.querySelector('button.expand');
+        if (!btn) return;
+        btn.addEventListener('click', function () { open(figure, btn); });
+      })(plates[i]);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
