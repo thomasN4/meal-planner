@@ -36,9 +36,11 @@ public sealed record AiProviderInfo(
 /// table, not a service. Don't give it a DbContext and don't register it in DI.
 /// </para>
 /// <para>
-/// <strong>Snapshot: 2026-08-19.</strong> Ids move, providers add effort levels,
-/// and key prefixes are what these companies issue today rather than a contract
-/// any of them has made. Nothing here is a whitelist — a model id that leaves
+/// <strong>Snapshot: 2026-08-19</strong>; the OpenAI and OpenRouter ids were
+/// re-checked on 2026-09-18 against OpenAI's models page and OpenRouter's
+/// <c>/api/v1/models</c>. Ids move, providers add effort levels, and key
+/// prefixes are what these companies issue today rather than a contract any of
+/// them has made. Nothing here is a whitelist — a model id that leaves
 /// this list degrades to the page's "Other…" free-text box with the stored id
 /// intact, and a key prefix nobody recognises falls back to asking which
 /// provider it is. Both escape hatches exist because this table will go stale.
@@ -75,6 +77,7 @@ public static class AiCatalog
             [
                 new("claude-opus-5", "Claude Opus 5", true),
                 new("claude-sonnet-5", "Claude Sonnet 5", true),
+                new("claude-fable-5-1", "Claude Fable 5.1", true),
                 new("claude-fable-5", "Claude Fable 5", true),
                 // Effort is not merely ignored on Haiku 4.5 — the request is
                 // rejected. This is the case SupportsEffort exists for, and it
@@ -90,12 +93,16 @@ public static class AiCatalog
             // match is what keeps the two apart.
             ["sk-proj-", "sk-"],
             [
+                new("gpt-6-astra", "GPT-6 Astra", true),
                 new("gpt-5.6-sol", "GPT-5.6 Sol", true),
                 new("gpt-5.6-terra", "GPT-5.6 Terra", true),
                 new("gpt-5.6-luna", "GPT-5.6 Luna", true),
-                new("gpt-5.2-codex", "GPT-5.2 Codex", true),
             ],
-            // Minimal exists in the enum only because OpenAI offers it.
+            // Minimal exists in the enum only because OpenAI offers it. OpenAI
+            // calls the supported subset "model-dependent" (2026-09-18) without
+            // publishing it per model, so an effort a model turns down fails that
+            // one call — logged, and the feature returns nothing — rather than
+            // being guessed away here.
             [AiEffort.Minimal, AiEffort.Low, AiEffort.Medium, AiEffort.High, AiEffort.XHigh, AiEffort.Max]),
 
         new(
@@ -107,7 +114,9 @@ public static class AiCatalog
                 new("anthropic/claude-opus-5", "Claude Opus 5", true),
                 new("google/gemini-3.6-flash", "Gemini 3.6 Flash", true),
                 new("x-ai/grok-4.6", "Grok 4.6", true),
-                new("qwen/qwen3.8-max", "Qwen 3.8 Max", true),
+                // The undated "qwen/qwen3.8-max" was listed here and is gone from
+                // OpenRouter's catalogue; only the dated snapshot remains.
+                new("qwen/qwen3.8-max-0902", "Qwen 3.8 Max", true),
             ],
             // OpenRouter normalizes effort across a catalogue of hundreds, so
             // only the three every backend understands are offered here. A model
