@@ -2,6 +2,7 @@ using System.Net;
 using MealPlanner.Components;
 using MealPlanner.Data;
 using MealPlanner.Mcp;
+using MealPlanner.Models;
 using MealPlanner.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -50,15 +51,26 @@ builder.Services.Configure<ReceiptScanningOptions>(
     builder.Configuration.GetSection(ReceiptScanningOptions.SectionName));
 builder.Services.AddSingleton<IReceiptScanner, ClaudeReceiptScanner>();
 
-// Household-wide AI settings. Scoped with factory-based database access, like
-// InventoryService and RecipeService; no notifier, for the reasons in the class
-// doc.
-//
-// NOTHING CONSUMES THESE YET. The three services above still read their
-// IOptions<T> from appsettings.json, and the settings page says so on screen.
-// Wiring them up is a separate pass, and it is the pass that gets to delete the
-// page's "not yet in effect" banner.
-builder.Services.AddScoped<AiSettingsService>();
+// Household-wide AI settings: which provider, model and effort each of the
+// three services above uses, read from here at the start of every call. A
+// feature with nothing saved runs its appsettings.json Model/Effort on the
+// claude CLI, as it always did. A singleton because the three features are, and
+// it holds no state of its own (factory-based DB access per call); no notifier,
+// for the reasons in the class doc.
+builder.Services.AddSingleton<AiSettingsService>();
+
+// The HTTP providers a feature can be pointed at instead of the CLI. Named
+// clients with no HttpClient timeout: each call carries its feature's own
+// TimeoutSeconds, and a second, shorter clock underneath it would fire first
+// and report a timeout nobody configured.
+builder.Services.AddHttpClient(AnthropicApiClient.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient(OpenAiCompatibleClient.OpenAiHttpClient, c => c.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient(OpenAiCompatibleClient.OpenRouterHttpClient, c => c.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddSingleton<IApiModelClient, AnthropicApiClient>();
+builder.Services.AddSingleton<IApiModelClient>(sp =>
+    new OpenAiCompatibleClient(AiProvider.OpenAi, sp.GetRequiredService<IHttpClientFactory>()));
+builder.Services.AddSingleton<IApiModelClient>(sp =>
+    new OpenAiCompatibleClient(AiProvider.OpenRouter, sp.GetRequiredService<IHttpClientFactory>()));
 
 builder.Services
     .AddMcpServer()

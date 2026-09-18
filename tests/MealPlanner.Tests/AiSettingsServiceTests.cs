@@ -25,6 +25,94 @@ public class AiSettingsServiceTests
         Assert.Equal(AiEffort.Medium, Choice(settings, AiFeature.RecipeGeneration).Effort);
         Assert.Equal(AiEffort.Low, Choice(settings, AiFeature.Categorization).Effort);
         Assert.Equal(AiEffort.Low, Choice(settings, AiFeature.ReceiptScanning).Effort);
+        Assert.All(settings.Features, f => Assert.True(f.IsDefault));
+    }
+
+    [Fact]
+    public async Task The_default_is_read_from_the_options_not_written_into_the_service()
+    {
+        // The service used to carry its own copy of these values. Two answers to
+        // "what runs by default" is how the page ends up showing one model while
+        // the feature runs another.
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService(
+            categorization: new CategorizationOptions { Model = "haiku", Effort = "HIGH" },
+            recipes: new RecipeGenerationOptions { Model = "opus", Effort = "max" });
+
+        var settings = await service.GetAsync();
+
+        Assert.Equal("haiku", Choice(settings, AiFeature.Categorization).Model);
+        Assert.Equal(AiEffort.High, Choice(settings, AiFeature.Categorization).Effort);
+        Assert.Equal("opus", Choice(settings, AiFeature.RecipeGeneration).Model);
+        Assert.Equal(AiEffort.Max, Choice(settings, AiFeature.RecipeGeneration).Effort);
+    }
+
+    [Fact]
+    public async Task A_typo_in_the_appsettings_effort_means_no_effort_rather_than_a_crash()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService(
+            categorization: new CategorizationOptions { Model = " ", Effort = "loww" });
+
+        var choice = await service.GetFeatureAsync(AiFeature.Categorization);
+
+        Assert.Null(choice.Effort);
+        // A blank model would be `--model ""`; the options classes' own default
+        // stands in.
+        Assert.Equal("sonnet", choice.Model);
+    }
+
+    [Fact]
+    public async Task A_saved_choice_is_no_longer_the_default()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService();
+
+        await service.SaveFeatureAsync(AiFeature.Categorization, AiProvider.ClaudeCli, "haiku", AiEffort.Low);
+
+        Assert.False((await service.GetFeatureAsync(AiFeature.Categorization)).IsDefault);
+        Assert.True((await service.GetFeatureAsync(AiFeature.RecipeGeneration)).IsDefault);
+    }
+
+    [Fact]
+    public async Task Resolving_an_api_provider_brings_its_key()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService();
+        await service.SetApiKeyAsync(AiProvider.OpenRouter, "sk-or-v1-resolve-me-0000");
+        await service.SaveFeatureAsync(
+            AiFeature.ReceiptScanning, AiProvider.OpenRouter, "google/gemini-3.6-flash", AiEffort.Low);
+
+        var resolved = await service.ResolveAsync(AiFeature.ReceiptScanning);
+
+        Assert.Equal(
+            new ResolvedModel(AiProvider.OpenRouter, "google/gemini-3.6-flash", AiEffort.Low, "sk-or-v1-resolve-me-0000"),
+            resolved);
+    }
+
+    [Fact]
+    public async Task Resolving_the_cli_never_carries_a_key()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService();
+        await service.SetApiKeyAsync(AiProvider.AnthropicApi, "sk-ant-api03-not-for-the-cli");
+
+        var resolved = await service.ResolveAsync(AiFeature.Categorization);
+
+        Assert.Equal(AiProvider.ClaudeCli, resolved.Provider);
+        Assert.Null(resolved.ApiKey);
+    }
+
+    [Fact]
+    public async Task Resolving_an_api_provider_with_no_key_resolves_with_none()
+    {
+        // Not an exception here: the client refuses before sending anything,
+        // and the feature's catch-all logs that as the reason.
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService();
+        await service.SaveFeatureAsync(AiFeature.Categorization, AiProvider.OpenAi, "gpt-5.6-luna", AiEffort.Low);
+
+        Assert.Null((await service.ResolveAsync(AiFeature.Categorization)).ApiKey);
     }
 
     [Fact]

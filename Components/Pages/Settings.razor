@@ -16,21 +16,6 @@
 <h1>Settings</h1>
 <p class="text-muted">Which model each feature asks for, and how this browser looks and reads.</p>
 
-@* Device (a) of four. It names all three features, so wiring one of them up
-   forces an edit here — and the per-card "Running today" line below is the
-   backstop for the state where one is wired and this is stale.
-
-   No live-region role: this is static page copy, not an update. The page's one
-   role="status" belongs to save feedback, and a second live region for text that
-   never changes would announce on every load for no reason. *@
-<div class="alert alert-warning">
-    <strong>Saved, but not yet in effect.</strong> These choices are saved and load back
-    for real &mdash; but no feature reads them <em>yet</em>. Recipe generation, ingredient
-    classification and receipt scanning all still use the <code>claude</code> CLI settings
-    in <code>appsettings.json</code>. Each card says what its feature is actually running
-    today.
-</div>
-
 @if (settings is null)
 {
     <p class="text-muted">Loading&hellip;</p>
@@ -197,13 +182,19 @@ else
                     }
                 </div>
 
-                @* Device (b): read off the live IOptions<T>, never hardcoded, so
-                   it cannot drift and stays correct the day one feature *is*
-                   wired and the banner above becomes a lie. *@
+                @* What this page does not control, read off the live IOptions<T>
+                   rather than hardcoded so it cannot drift from appsettings.json.
+                   A feature with nothing saved runs that file's Model/Effort on
+                   the CLI — the choice shown below — and says so, because
+                   "default" and "chosen" look identical in a dropdown. *@
                 <p class="in-effect text-muted small mb-2">
-                    Running today: <code>claude</code> CLI, model <code>@RunningModel(feature)</code>,
-                    effort <code>@RunningEffort(feature)</code>, timeout @RunningTimeout(feature)s
-                    &mdash; from <code>@SectionName(feature)</code> in appsettings.json.
+                    @if (Stored(feature).IsDefault)
+                    {
+                        <span class="is-default">Nothing saved yet &mdash; running the default from
+                            <code>@SectionName(feature)</code> in appsettings.json.</span>
+                    }
+                    Timeout @RunningTimeout(feature)s and the on/off switch come from
+                    <code>@SectionName(feature)</code> in appsettings.json.
                 </p>
 
                 @if (!EnabledToday(feature))
@@ -289,12 +280,13 @@ else
                 @if (MissingKeyFor(draft) is { } missing)
                 {
                     @* Warns, never blocks: choosing the provider before pasting
-                       the key is a legitimate order of operations, and nothing
-                       calls anything yet anyway. role=alert, because the page's
-                       one role=status belongs to save feedback. *@
+                       the key is a legitimate order of operations. But it says
+                       what saving anyway costs — every call fails, logged, and
+                       the feature comes back empty. role=alert, because the
+                       page's one role=status belongs to save feedback. *@
                     <div role="alert" class="alert alert-warning py-2 mt-2 mb-0 needs-key">
-                        @missing has no key yet &mdash; add one under
-                        <a href="#credentials">API keys</a>.
+                        @missing has no key yet &mdash; @Label(feature).ToLowerInvariant() will fail
+                        until one is added under <a href="#credentials">API keys</a>.
                     </div>
                 }
             </div>
@@ -621,10 +613,13 @@ else
 
     // ---- dirty tracking ----
 
+    private FeatureChoice Stored(AiFeature feature) =>
+        settings!.Features.First(f => f.Feature == feature);
+
     private bool Dirty(AiFeature feature)
     {
         var draft = drafts[feature];
-        var stored = settings!.Features.First(f => f.Feature == feature);
+        var stored = Stored(feature);
         return draft.Provider != stored.Provider
             || !string.Equals(draft.Model.Trim(), stored.Model, StringComparison.Ordinal)
             || draft.Effort != stored.Effort;
@@ -691,7 +686,10 @@ else
             }
 
             await LoadAsync();
-            ShowStatus($"Saved {written} {(written == 1 ? "change" : "changes")} (not yet in effect).");
+            // "Next call" and not "now": each feature reads its settings as a
+            // call starts, so one already running finishes on the old model.
+            ShowStatus($"Saved {written} {(written == 1 ? "change" : "changes")}. " +
+                       "Each feature uses the new settings from its next call.");
         }
         catch (Exception ex)
         {
@@ -741,7 +739,7 @@ else
     private static string NormalizeLanguage(string? value) =>
         Array.Exists(LanguageChoices, c => c.Value == value) ? value! : LanguageFallback;
 
-    // ---- what is actually running ----
+    // ---- what appsettings.json still owns ----
 
     private static string Label(AiFeature feature) => feature switch
     {
@@ -757,20 +755,6 @@ else
         AiFeature.RecipeGeneration => RecipeGenerationOptions.SectionName,
         AiFeature.ReceiptScanning => ReceiptScanningOptions.SectionName,
         _ => feature.ToString(),
-    };
-
-    private string RunningModel(AiFeature feature) => feature switch
-    {
-        AiFeature.Categorization => ClassifyOptions.Value.Model,
-        AiFeature.RecipeGeneration => RecipeOptions.Value.Model,
-        _ => ScanOptions.Value.Model,
-    };
-
-    private string RunningEffort(AiFeature feature) => feature switch
-    {
-        AiFeature.Categorization => ClassifyOptions.Value.Effort,
-        AiFeature.RecipeGeneration => RecipeOptions.Value.Effort,
-        _ => ScanOptions.Value.Effort,
     };
 
     private int RunningTimeout(AiFeature feature) => feature switch

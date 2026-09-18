@@ -28,7 +28,9 @@ internal sealed class PageHarness : BunitContext
         Generator = generator;
         Scanner = scanner;
         Recipes = inventory.NewRecipeService();
-        Settings = inventory.NewAiSettingsService();
+        // Handed the page's own option instances, so a test that changes a
+        // default before rendering changes what the service falls back to.
+        Settings = inventory.NewAiSettingsService(ClassifyOptions, RecipeOptions, ScanOptions);
 
         // Registered as singletons rather than scoped: a BunitContext resolves
         // each page from the same container, and sharing one InventoryService
@@ -136,12 +138,13 @@ internal sealed class PageHarness : BunitContext
     }
 
     /// <summary>
-    /// A second settings service over the same file — another tab, or the
-    /// provider clients a later pass will add. Even with no notifier, this is
+    /// A second settings service over the same file — another tab, or a
+    /// feature resolving its model. Even with no notifier, this is
     /// how a test proves a write actually landed rather than reading back the
     /// page's own in-memory drafts.
     /// </summary>
-    public AiSettingsService OutOfCircuitSettings() => _inventory.NewAiSettingsService();
+    public AiSettingsService OutOfCircuitSettings() =>
+        _inventory.NewAiSettingsService(ClassifyOptions, RecipeOptions, ScanOptions);
 
     protected override async ValueTask DisposeAsyncCore()
     {

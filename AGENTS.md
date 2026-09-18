@@ -258,23 +258,95 @@ design: it serves a trusted home LAN.
     recomputed, and clearing would reopen the list under the name just chosen.
     A blank `Value` does clear it, and that is what lets a page empty the box
     and get a fresh list without reaching into the widget.
-- **Settings** — `/settings` (`Components/Pages/Settings.razor`). **Nothing
-  consumes it yet**, and that is the design rather than an unfinished edge: the
-  three `Claude*` services still read `IOptions<T>` from `appsettings.json`, and
-  the page says so in a banner naming all three features, in a per-card *Running
-  today* line, and in the save status. The banner's test says to delete it in the
-  same commit that wires the services up; the per-card line is read off the live
-  `IOptions<T>` so it stays true in the half-wired state the banner cannot
-  describe. `AiSettingsService` (+ `AiCatalog`, `Models/AiSettings.cs`) is the
-  choke point, shaped like `RecipeService` — factory-based DB access, records
-  out, its own clamping, **no retry ladder and no notifier**: the primary key is
-  the enum value so racing writers contend for one row, and nothing ever deletes
-  a row (clearing a key nulls a column), so one catch-and-reread covers the
-  insert race. Model/provider/key are household-wide in SQLite; **language and
-  theme are per-browser in localStorage** (`wwwroot/lang.js`, a sibling of
-  `theme.js` rather than an addition to it) and are the two controls that do
-  *not* wait for the page's single Save. `ThemeToggle` moved off `MainLayout`'s
-  top row onto this page.
+- **Settings** — `/settings` (`Components/Pages/Settings.razor`) picks the
+  provider, model and effort for each of the three features, and stores one API
+  key per provider. `AiSettingsService` (+ `AiCatalog`, `Models/AiSettings.cs`) is
+  the choke point, shaped like `RecipeService` — factory-based DB access, records
+  out, its own clamping — and a **singleton**, because it holds no state and the
+  three singleton features need it. Model/provider/key are household-wide in
+  SQLite; **language and theme are per-browser in localStorage**
+  (`wwwroot/lang.js`, a sibling of `theme.js` rather than an addition to it) and
+  are the two controls that do *not* wait for the page's single Save.
+  `ThemeToggle` moved off `MainLayout`'s top row onto this page.
+  - **Read on every call.** Each feature calls `ResolveAsync(feature)` inside its
+    existing try as a call starts. A save applies from the next call with no
+    restart, a call already running keeps its model, and a failed settings read
+    degrades like any other failed call. `FeatureRoutingTests` pins the
+    no-restart claim.
+  - **No saved row means appsettings.json.** A feature with nothing saved runs
+    its section's `Model`/`Effort` on the CLI — exactly what it ran before the
+    page existed. The service reads those options; it has no defaults table of
+    its own, because two answers to "what runs by default" is how the page ends
+    up showing one model while the feature runs another. `FeatureChoice.IsDefault`
+    lets the card say so. `Enabled`, `ExecutablePath`, `TimeoutSeconds`,
+    `MaxBytes`/`MaxLines` and the categorizer's batch knobs **stay in
+    appsettings**; the per-card `p.in-effect` line says which, read off the live
+    `IOptions<T>`. The timeout applies to API calls too.
+  - **Two transports, one task definition.** Each `Claude*` feature keeps its
+    prompt, schema, payload builder, parser *and its own CLI `RunAsync`* (the
+    measured flag sets stay where they were measured). Any other provider goes
+    through an `IApiModelClient` (`Services/ModelCall.cs`) handed the same
+    prompt, schema and payload as a `ModelCall`, and returning the answer JSON
+    as text, or throwing. The classes keep their `Claude*` names on purpose; the
+    paper trail in this file is keyed on them.
+    - `AnthropicApiClient` uses the official **`Anthropic` NuGet SDK**
+      (`claude-api` guidance: SDK over raw HTTP wherever one exists). It sends no
+      `thinking` parameter (current models are adaptive by default, and Fable
+      400s on most explicit settings). It omits effort when null, because Haiku
+      4.5 rejects it. On Opus 5 and the Fable family it opts into **server-side
+      refusal fallback** (`fallbacks: "default"`, beta
+      `server-side-fallback-2026-07-01`) and nowhere else: a model with no
+      default configuration would 400 every call. `MaxRetries = 0`, so the SDK's
+      retries cannot stack past the feature's timeout.
+    - `OpenAiCompatibleClient` is raw `HttpClient` over **Chat Completions** for
+      both OpenAI and OpenRouter — the one shape both speak. OpenRouter has no
+      SDK, and the two differ in three fields (`BuildRequest`):
+      - effort is `reasoning_effort` on OpenAI and `reasoning.effort` on
+        OpenRouter;
+      - the output cap is `max_completion_tokens` on OpenAI and `max_tokens` on
+        OpenRouter;
+      - OpenRouter also gets `provider.require_parameters`, without which a route
+        to a backend that ignores `response_format` answers in prose.
+      A PDF is a `file` part, never an `image_url`.
+    - **Schemas are adapted per call, never edited** (`StrictSchema`): strict
+      modes reject the recipe schema's `minItems: 2`/`maxItems: 3` (Anthropic
+      takes 0 or 1 only), so the client strips them, and the CLI's schema stays
+      byte-identical. The prompt still asks for 2–3, and `ParseRecipes` takes any
+      count.
+    - Every refusal, `length`/`max_tokens` cut-off, content filter or HTTP error
+      **throws** in the client, and the feature's catch-all logs it as the reason.
+      Otherwise half a JSON document reaches a parser and gets reported as
+      "invalid JSON", which names the wrong failure.
+    - **No key is not special-cased in the features**: the client refuses before
+      sending, and the log line names the missing key. The page's needs-key alert
+      still warns rather than blocks, and now says the feature *will fail*.
+    - The receipt parser splits along the same line: `ParseScan` finds the
+      stream-json result, `ParseAnswer` locates a bare (possibly fenced) API
+      answer, and both meet in `ParseProducts`. `MaxLines` and `WarnAbout` are
+      decided there alone, so a scan warns the same way whoever read it.
+    - Success log lines carry `{Provider}/{Model}`. That is how to see what
+      actually ran.
+  - **`ResolvedModel` is the one record outside the service that holds a key**,
+    and it overrides `PrintMembers` so the generated `ToString` prints
+    `ApiKey = set`, never the key. A record logged whole would otherwise write
+    it out. `ResolveAsync` is for the features, never a page, for the same
+    reason `GetAsync` returns `CredentialStatus`.
+  - **No retry ladder, and still no notifier.** The primary key is the enum
+    value, so racing writers contend for one row, and nothing ever deletes a row
+    (clearing a key nulls a column), so one catch-and-reread covers the insert
+    race. The notifier question was parked until something read settings live.
+    The answer is still no:
+    - features read per call, so there is no in-memory copy to go stale;
+    - a stale second tab's Save writes only the cards *it* made dirty, so it can
+      overwrite a feature only by editing that same feature — last writer wins,
+      never a silent revert of something it did not touch.
+  - **The suite never reaches a provider.** `FakeHttp` is both the handler and
+    the `IHttpClientFactory`, and `AnthropicClient.HttpClient` accepts it, so all
+    three clients run end to end with no network. Its responder is handed the
+    **request's own token**: one that waited on xUnit's token instead never saw
+    the client's timeout and hung the whole run rather than failing. The
+    routing tests point `ExecutablePath` at a path that does not exist, so a
+    routing regression fails there instead of spawning a real `claude`.
   - **An unreadable enum column is not caught by `Enum.IsDefined` in a service.**
     EF's `HasConversion<string>()` throws during *materialization*, before any
     service code runs, so a hand-edited or downgraded database took the whole
@@ -761,7 +833,11 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     MCP server; `--no-session-persistence` so ingredients don't each leave a
     session file behind.
   - `--effort low`, not `medium`: the answer is pinned to 13 enum values, so
-    there is no deliberation to buy.
+    there is no deliberation to buy. That is the *default* (appsettings.json);
+    `/settings` can change model and effort per feature, and a null effort
+    **drops the `--effort` pair entirely** rather than sending it empty.
+    `CliArguments` is the one place each feature builds its argv, split out so
+    `FeatureRoutingTests` can assert it without spawning anything.
   - **Batch.** Eight names cost 3.4s against one name's 3.3s — spawning the
     process dominates — which is why the interface takes a list.
   - `--tools ""` behaved inconsistently across runs, so nothing depends on it;

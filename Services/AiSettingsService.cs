@@ -1,11 +1,22 @@
 using MealPlanner.Data;
 using MealPlanner.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace MealPlanner.Services;
 
 /// <summary>One feature's stored choice, as callers see it.</summary>
-public sealed record FeatureChoice(AiFeature Feature, AiProvider Provider, string Model, AiEffort? Effort);
+/// <param name="IsDefault">
+/// True when nothing is saved for this feature and the choice is the
+/// <c>appsettings.json</c> default — so the settings page can say where the
+/// value came from.
+/// </param>
+public sealed record FeatureChoice(
+    AiFeature Feature,
+    AiProvider Provider,
+    string Model,
+    AiEffort? Effort,
+    bool IsDefault = false);
 
 /// <summary>
 /// What is known about a provider's key <em>without</em> knowing the key.
@@ -31,18 +42,20 @@ public sealed record AiSettings(
 /// The single choke point for household-wide AI settings: which provider, model
 /// and effort each feature uses, and one API key per provider.
 /// <para>
-/// <strong>Nothing consumes these yet.</strong> <c>ClaudeRecipeGenerator</c>,
-/// <c>ClaudeIngredientClassifier</c> and <c>ClaudeReceiptScanner</c> all still
-/// read <c>IOptions&lt;T&gt;</c> from <c>appsettings.json</c>. This service
-/// stores the household's choices and reads them back; wiring them into the
-/// three callers is a separate pass. The settings page says so on screen, in
-/// several places, on purpose.
+/// <strong>Read on every call.</strong> <c>ClaudeIngredientClassifier</c>,
+/// <c>ClaudeRecipeGenerator</c> and <c>ClaudeReceiptScanner</c> each call
+/// <see cref="ResolveAsync"/> as a call starts, so a save takes effect from the
+/// next call without a restart, and a call already running keeps the model it
+/// started with. A feature with no saved row runs its <c>appsettings.json</c>
+/// section's <c>Model</c> and <c>Effort</c> on the <c>claude</c> CLI — exactly
+/// what it ran before this page existed.
 /// </para>
 /// <para>
 /// Shaped like <see cref="RecipeService"/>: a DbContext factory, a short-lived
 /// context per call, records out rather than entities, and its own clamping —
 /// EF's <c>[MaxLength]</c> is not enforced and SQLite ignores TEXT lengths, so
-/// the service is the trust boundary.
+/// the service is the trust boundary. It holds no state of its own, which is
+/// why it can be the singleton the three singleton features need.
 /// </para>
 /// <para>
 /// <strong>No retry ladder, and no notifier publish.</strong>
@@ -51,11 +64,18 @@ public sealed record AiSettings(
 /// delete flips the branch back (issue #5). Here the primary key is the enum
 /// value, so racing writers contend for one row rather than racing to insert
 /// two, and nothing ever deletes a row — clearing a key nulls a column. One
-/// catch-and-reread on the insert path covers it. And there is no
-/// out-of-circuit writer: MCP does not touch settings and must not, so a page
-/// refreshes itself. Revisit the notifier decision when a running feature reads
-/// settings live and a second tab's stale save could revert a model
-/// mid-generation.
+/// catch-and-reread on the insert path covers it.
+/// </para>
+/// <para>
+/// The notifier question was left open until something read settings live,
+/// and now something does. The answer is still no. The features read at the
+/// start of each call, so there is no in-memory copy to go stale and no running
+/// call to switch mid-way. The one remaining risk is a second tab: its page does
+/// not refresh when another tab saves. But Save writes only the cards that tab
+/// changed itself, so a stale tab can overwrite a feature someone just edited
+/// elsewhere only by editing that same feature — a plain last-writer-wins, not
+/// a silent revert of something it never touched. MCP does not touch settings
+/// and must not.
 /// </para>
 /// </summary>
 public class AiSettingsService
@@ -69,28 +89,47 @@ public class AiSettingsService
     /// </summary>
     private const int MinLengthForTail = 12;
 
-    /// <summary>
-    /// What a feature uses before anybody has chosen. These mirror
-    /// <c>appsettings.json</c> exactly the way the three options classes mirror
-    /// it in C#, and they are the answer for a missing row — which is why no
-    /// migration seeds anything. Seeding would freeze today's defaults into SQL
-    /// and give the same question two answers.
-    /// </summary>
-    private static readonly Dictionary<AiFeature, FeatureChoice> Defaults = new()
-    {
-        [AiFeature.Categorization] =
-            new(AiFeature.Categorization, AiProvider.ClaudeCli, "sonnet", AiEffort.Low),
-        [AiFeature.RecipeGeneration] =
-            new(AiFeature.RecipeGeneration, AiProvider.ClaudeCli, "sonnet", AiEffort.Medium),
-        [AiFeature.ReceiptScanning] =
-            new(AiFeature.ReceiptScanning, AiProvider.ClaudeCli, "sonnet", AiEffort.Low),
-    };
-
     private readonly IDbContextFactory<MealPlannerDbContext> _factory;
+    private readonly IOptions<CategorizationOptions> _categorization;
+    private readonly IOptions<RecipeGenerationOptions> _recipes;
+    private readonly IOptions<ReceiptScanningOptions> _receipts;
 
-    public AiSettingsService(IDbContextFactory<MealPlannerDbContext> factory)
+    public AiSettingsService(
+        IDbContextFactory<MealPlannerDbContext> factory,
+        IOptions<CategorizationOptions> categorization,
+        IOptions<RecipeGenerationOptions> recipes,
+        IOptions<ReceiptScanningOptions> receipts)
     {
         _factory = factory;
+        _categorization = categorization;
+        _recipes = recipes;
+        _receipts = receipts;
+    }
+
+    /// <summary>
+    /// What a feature uses before anybody has chosen: its <c>appsettings.json</c>
+    /// section, on the CLI. Read from the options rather than written out here,
+    /// so "what runs by default" has one answer. No migration seeds anything, for
+    /// the same reason — seeding would freeze today's defaults into SQL.
+    /// </summary>
+    private FeatureChoice DefaultFor(AiFeature feature)
+    {
+        var (model, effort) = feature switch
+        {
+            AiFeature.Categorization => (_categorization.Value.Model, _categorization.Value.Effort),
+            AiFeature.RecipeGeneration => (_recipes.Value.Model, _recipes.Value.Effort),
+            _ => (_receipts.Value.Model, _receipts.Value.Effort),
+        };
+
+        // A blank Model in appsettings would be a CLI call with `--model ""`.
+        // "sonnet" is what the options classes themselves default to.
+        var cleaned = string.IsNullOrWhiteSpace(model) ? "sonnet" : Clamp(model.Trim(), MaxModelLength);
+        return new FeatureChoice(
+            feature,
+            AiProvider.ClaudeCli,
+            cleaned,
+            NormalizeEffort(AiProvider.ClaudeCli, cleaned, AiEffortSpelling.Parse(effort)),
+            IsDefault: true);
     }
 
     /// <summary>
@@ -133,6 +172,49 @@ public class AiSettingsService
             .ToList();
 
         return new AiSettings(choices, credentials);
+    }
+
+    /// <summary>
+    /// One feature's choice, with the same fallback rules as <see cref="GetAsync"/>.
+    /// </summary>
+    public async Task<FeatureChoice> GetFeatureAsync(AiFeature feature, CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(feature))
+        {
+            throw new ArgumentException($"Unknown feature '{feature}'.", nameof(feature));
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+
+        // The provider filter is in SQL for GetAsync's reason: an unmapped
+        // provider string would otherwise throw during materialization.
+        var providers = Enum.GetValues<AiProvider>();
+        var row = await db.FeatureAiSettings.AsNoTracking()
+            .Where(r => r.Feature == feature && providers.Contains(r.Provider))
+            .FirstOrDefaultAsync(ct);
+
+        return Read(row, feature);
+    }
+
+    /// <summary>
+    /// What one call of <paramref name="feature"/> should run on, key included —
+    /// what each feature asks for as a call starts.
+    /// <para>
+    /// For the three features, <strong>never for a page</strong>: this is the
+    /// second method that hands back key material, after
+    /// <see cref="GetApiKeyAsync"/>, and <see cref="ResolvedModel"/> keeps the key
+    /// out of its own <c>ToString</c>. A provider that takes no key never
+    /// carries one, even if a stale row holds one.
+    /// </para>
+    /// </summary>
+    public async Task<ResolvedModel> ResolveAsync(AiFeature feature, CancellationToken ct = default)
+    {
+        var choice = await GetFeatureAsync(feature, ct);
+        var key = AiCatalog.For(choice.Provider).NeedsApiKey
+            ? await GetApiKeyAsync(choice.Provider, ct)
+            : null;
+
+        return new ResolvedModel(choice.Provider, choice.Model, choice.Effort, key);
     }
 
     /// <summary>
@@ -253,9 +335,9 @@ public class AiSettingsService
     }
 
     /// <summary>
-    /// The one method that hands back key material.
+    /// Hands back key material — the primitive under <see cref="ResolveAsync"/>.
     /// <para>
-    /// For the provider clients that will eventually make the calls. <strong>Not
+    /// For the code that makes the calls. <strong>Not
     /// for a page</strong> — a Razor component that holds a key will render it
     /// sooner or later, which is why <see cref="GetAsync"/> answers with
     /// <see cref="CredentialStatus"/> instead.
@@ -311,9 +393,9 @@ public class AiSettingsService
     /// than throwing on every page load — the rule <c>ThemeToggle</c> applies to
     /// localStorage and <see cref="RecipeService"/> applies to malformed JSON.
     /// </summary>
-    private static FeatureChoice Read(FeatureAiSetting? row, AiFeature feature)
+    private FeatureChoice Read(FeatureAiSetting? row, AiFeature feature)
     {
-        var fallback = Defaults[feature];
+        var fallback = DefaultFor(feature);
         if (row is null || !Enum.IsDefined(row.Provider) || string.IsNullOrWhiteSpace(row.Model))
         {
             return fallback;

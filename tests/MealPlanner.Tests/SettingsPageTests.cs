@@ -7,33 +7,58 @@ namespace MealPlanner.Tests;
 public class SettingsPageTests
 {
     /// <summary>
-    /// Delete this test in the same commit that wires the three services up to
-    /// <c>AiSettingsService</c>. Until then, deleting the banner turns it red,
-    /// which is the whole point of it.
+    /// The page used to open on a "not yet in effect" banner, with a test that
+    /// said to delete both the day the features read these settings. They do
+    /// now, and a banner saying otherwise would be the lie.
     /// </summary>
     [Fact]
-    public async Task The_page_says_the_settings_are_not_in_effect_yet()
+    public async Task The_page_no_longer_says_its_settings_are_not_in_effect()
     {
         await using var page = await PageHarness.CreateAsync();
         var cut = page.RenderSettings();
 
-        Assert.Contains("not yet in effect", cut.Markup, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Recipe generation, ingredient", cut.Markup, StringComparison.Ordinal);
+        Assert.DoesNotContain("not yet in effect", cut.Markup, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no feature reads them", cut.Markup, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Each_feature_card_names_what_it_is_actually_running_today()
+    public async Task With_nothing_saved_a_card_shows_its_appsettings_default_and_says_so()
     {
         await using var page = await PageHarness.CreateAsync();
         page.RecipeOptions.Model = "opus";
+        page.RecipeOptions.TimeoutSeconds = 240;
         page.ClassifyOptions.Effort = "xhigh";
 
         var cut = page.RenderSettings();
 
-        // Hardcoding "sonnet" into the markup instead of reading IOptions turns
-        // this red, which is what keeps the line honest once one feature is wired.
-        Assert.Contains("opus", InEffect(cut, AiFeature.RecipeGeneration), StringComparison.Ordinal);
-        Assert.Contains("xhigh", InEffect(cut, AiFeature.Categorization), StringComparison.Ordinal);
+        // Read off the live options, never hardcoded: "sonnet" in the markup
+        // would show a default the features are not running.
+        Assert.Equal("opus", Selected(Select(cut, AiFeature.RecipeGeneration, "model-select")));
+        Assert.Equal(nameof(AiEffort.XHigh), Selected(Select(cut, AiFeature.Categorization, "effort-select")));
+
+        var line = InEffect(cut, AiFeature.RecipeGeneration);
+        Assert.Contains("Nothing saved yet", line, StringComparison.Ordinal);
+        Assert.Contains("240s", line, StringComparison.Ordinal);
+        Assert.Contains("RecipeGeneration", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Saving_a_feature_drops_its_default_note_and_only_its_own()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        Select(cut, AiFeature.Categorization, "model-select").Change("haiku");
+        cut.Find("button.save-settings").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.DoesNotContain("Nothing saved yet", InEffect(cut, AiFeature.Categorization), StringComparison.Ordinal);
+            Assert.Contains("Nothing saved yet", InEffect(cut, AiFeature.RecipeGeneration), StringComparison.Ordinal);
+        });
+
+        // The timeout clause stays: appsettings still owns it after a save.
+        Assert.Contains("appsettings.json", InEffect(cut, AiFeature.Categorization), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -183,7 +208,7 @@ public class SettingsPageTests
     }
 
     [Fact]
-    public async Task Saving_reports_in_the_live_region_that_it_is_not_in_effect()
+    public async Task Saving_reports_in_the_live_region_when_it_takes_effect()
     {
         await using var page = await PageHarness.CreateAsync();
         var cut = page.RenderSettings();
@@ -194,7 +219,8 @@ public class SettingsPageTests
         cut.WaitForAssertion(() =>
         {
             var status = Assert.Single(cut.FindAll("div[role=status]"));
-            Assert.Contains("not yet in effect", status.TextContent, StringComparison.Ordinal);
+            Assert.Contains("Saved 1 change", status.TextContent, StringComparison.Ordinal);
+            Assert.Contains("next call", status.TextContent, StringComparison.Ordinal);
         });
     }
 
@@ -297,6 +323,8 @@ public class SettingsPageTests
         var card = cut.Find($"div.feature-card[data-feature={AiFeature.Categorization}]");
         var warning = Assert.Single(card.QuerySelectorAll("div.needs-key"));
         Assert.Equal("alert", warning.GetAttribute("role"));
+        // Says what saving anyway costs, now that something reads the choice.
+        Assert.Contains("will fail", warning.TextContent, StringComparison.Ordinal);
         // Warns, never blocks: Save is still reachable.
         Assert.False(cut.Find("button.save-settings").HasAttribute("disabled"));
     }

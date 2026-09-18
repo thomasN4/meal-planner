@@ -355,4 +355,34 @@ public class ReceiptParsingTests
 
         Assert.Equal(100, lines[0].Department!.Length);
     }
+
+    // ---- an API provider's answer: no stream-json around it ----
+
+    [Fact]
+    public void A_bare_api_answer_parses_the_same_as_a_cli_transcript()
+    {
+        const string answer =
+            """{"products":[{"name":"Riz basmati","quantity":"1 kg","isFood":true,"department":"Epicerie"},{"name":"Sac","quantity":"","isFood":false,"department":""}]}""";
+
+        var fromApi = ClaudeReceiptScanner.ParseAnswer(answer, maxLines: 60, out var apiProblem);
+        var fromCli = Parse(Transcript(answer), out var cliProblem);
+
+        Assert.Equal(fromCli, fromApi);
+        Assert.Equal(cliProblem, apiProblem);
+    }
+
+    [Theory]
+    [InlineData("", "no output")]
+    [InlineData("I could not read that receipt.", "no JSON object in output")]
+    [InlineData("""{"lines":[]}""", "no \"products\" array")]
+    public void An_unusable_api_answer_is_empty_with_a_reason(string answer, string expected)
+    {
+        var lines = ClaudeReceiptScanner.ParseAnswer(answer, maxLines: 60, out var problem);
+
+        Assert.Empty(lines);
+        Assert.Equal(expected, problem);
+        // An outright failure is the page's own "nothing readable" message,
+        // never an extra warning beside it.
+        Assert.Null(ClaudeReceiptScanner.WarnAbout(problem, lines.Count));
+    }
 }
