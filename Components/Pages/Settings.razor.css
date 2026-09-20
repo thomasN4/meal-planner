@@ -98,6 +98,22 @@
     color: var(--bs-body-color);
 }
 
+/* app.css's two-stop ring keys on .btn, and this is a bare glyph, so it was left
+   with the browser's default hairline outline — visible, but the one control on
+   the page ringing differently from every other. Spelled out rather than given a
+   .btn class, for .key-remove's own reason: Bootstrap's button padding would
+   double the chip's height.
+
+   The inner stop is --bs-secondary-bg, not --bs-body-bg: it is a halo, so it has
+   to be the ground this button actually sits on, and that ground is the chip.
+   Same split .key-chip.pending makes above, for the same reason. */
+.key-remove:focus-visible {
+    outline: none;
+    border-radius: 0.125rem;
+    box-shadow: 0 0 0 0.1rem var(--bs-secondary-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
 /* A page-wide Save gives no signal about *which* cards it will write, so every
    card holding a pending change is marked. Two signals: this painted edge and
    the word "Unsaved" in the card header. The card sits on --bs-body-bg, so the

@@ -40,6 +40,10 @@ public class SettingsPageTests
         Assert.Contains("Nothing saved yet", line, StringComparison.Ordinal);
         Assert.Contains("240s", line, StringComparison.Ordinal);
         Assert.Contains("RecipeGeneration", line, StringComparison.Ordinal);
+        // Named once. The timeout clause used to be a second, always-on sentence
+        // that repeated the section immediately after the first one named it,
+        // which reads as two facts about two places.
+        Assert.Equal(1, line.Split("RecipeGeneration").Length - 1);
     }
 
     [Fact]
@@ -271,6 +275,110 @@ public class SettingsPageTests
         Assert.Contains("Not a prefix we recognise", cut.Find("div.key-hint").TextContent, StringComparison.Ordinal);
         // Refused, not guessed — Add stays out of reach until somebody says.
         Assert.True(cut.Find("button.add-key").HasAttribute("disabled"));
+    }
+
+    /// <summary>
+    /// The hint credits the prefix only when the prefix is what answered. A
+    /// provider taken from the dropdown was told to us, and saying "recognised"
+    /// there claims a guess the app had just refused to make — one line under
+    /// the control that appeared because it could not.
+    /// </summary>
+    [Fact]
+    public async Task A_provider_we_were_told_is_not_reported_as_one_we_recognised()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("zz-unknown-prefix-abcdefgh1234");
+        cut.Find("select.key-provider-select").Change(nameof(AiProvider.OpenRouter));
+
+        var hint = cut.Find("div.key-hint").TextContent;
+        Assert.DoesNotContain("Recognised", hint, StringComparison.Ordinal);
+        Assert.Contains("OpenRouter", hint, StringComparison.Ordinal);
+        Assert.Contains("new key", hint, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A hand-picked provider belongs to the key it was picked for. Found in a
+    /// browser: pick one for a key nothing recognises, paste a key that names
+    /// itself over it, and the pick was still in force — with the dropdown gone
+    /// from the page, so nothing on screen offered a way to correct it. The key
+    /// would have been stored under the wrong provider and 401'd every call.
+    /// </summary>
+    [Fact]
+    public async Task A_key_that_names_its_own_provider_overrules_an_earlier_pick()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("zz-unknown-prefix-abcdefgh1234");
+        cut.Find("select.key-provider-select").Change(nameof(AiProvider.OpenRouter));
+
+        // Thought better of it: this one says what it is.
+        cut.Find("input.key-input").Input("sk-ant-api03-plainly-anthropic-7777");
+
+        Assert.Contains("Recognised as Anthropic API", cut.Find("div.key-hint").TextContent, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("select.key-provider-select"));
+
+        cut.Find("button.add-key").Click();
+        cut.Find("button.save-settings").Click();
+
+        await cut.InvokeAsync(async () =>
+        {
+            var settings = page.OutOfCircuitSettings();
+            Assert.Equal(
+                "sk-ant-api03-plainly-anthropic-7777",
+                await settings.GetApiKeyAsync(AiProvider.AnthropicApi));
+            Assert.Null(await settings.GetApiKeyAsync(AiProvider.OpenRouter));
+        });
+    }
+
+    /// <summary>
+    /// The other direction of the same rule, and the reason the override is kept
+    /// rather than cleared on every keystroke: edit a recognised key back down to a
+    /// prefix nothing knows, and the provider picked by hand for that key comes back —
+    /// with the dropdown showing it, so it is visible rather than assumed. Clearing
+    /// the override on each keystroke would instead blank the picker and disable Add
+    /// while somebody fixed a typo in the key they had already filed.
+    /// </summary>
+    [Fact]
+    public async Task An_unrecognised_prefix_falls_back_to_the_provider_picked_for_it()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("zz-unknown-prefix-abcdefgh1234");
+        cut.Find("select.key-provider-select").Change(nameof(AiProvider.OpenRouter));
+        cut.Find("input.key-input").Input("sk-ant-api03-plainly-anthropic-7777");
+        Assert.Contains("Recognised as Anthropic API", cut.Find("div.key-hint").TextContent, StringComparison.Ordinal);
+
+        // Back to a prefix nothing recognises: the earlier pick answers again.
+        cut.Find("input.key-input").Input("zz-unknown-prefix-abcdefgh5678");
+
+        var picker = cut.Find("select.key-provider-select");
+        Assert.Contains("Filed under OpenRouter", cut.Find("div.key-hint").TextContent, StringComparison.Ordinal);
+        Assert.Equal(nameof(AiProvider.OpenRouter), Selected(picker));
+        // Still addable, which is the point of remembering it.
+        Assert.False(cut.Find("button.add-key").HasAttribute("disabled"));
+    }
+
+    /// <summary>
+    /// A key too short to show a tail of falls back to a word, and the word has
+    /// to be true of the chip it is in: a pending one has not been stored.
+    /// </summary>
+    [Fact]
+    public async Task A_key_too_short_to_show_a_tail_does_not_claim_to_be_stored()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        // Under the 12 characters Tail() needs, so there is no tail to show.
+        cut.Find("input.key-input").Input("sk-or-v1-ab");
+        cut.Find("button.add-key").Click();
+
+        var chip = cut.Find("span.key-chip").TextContent;
+        Assert.Contains("new", chip, StringComparison.Ordinal);
+        Assert.DoesNotContain("stored", chip, StringComparison.Ordinal);
     }
 
     /// <summary>

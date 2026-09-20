@@ -191,11 +191,21 @@ else
                 <p class="in-effect text-muted small mb-2">
                     @if (Stored(feature).IsDefault)
                     {
-                        <span class="is-default">Nothing saved yet &mdash; running the default from
-                            <code>@SectionName(feature)</code> in appsettings.json.</span>
+                        @* One clause, because the section is the same one either way:
+                           an always-on second sentence named it twice in a row
+                           ("…the default from Categorization in appsettings.json.
+                           Timeout 90s and the on/off switch come from Categorization in
+                           appsettings.json."), which reads as two facts about two
+                           places. *@
+                        <span class="is-default">Nothing saved yet &mdash; the model below, the
+                            timeout of @RunningTimeout(feature)s and the on/off switch all come
+                            from <code>@SectionName(feature)</code> in appsettings.json.</span>
                     }
-                    Timeout @RunningTimeout(feature)s and the on/off switch come from
-                    <code>@SectionName(feature)</code> in appsettings.json.
+                    else
+                    {
+                        <text>Timeout @RunningTimeout(feature)s and the on/off switch come from
+                        <code>@SectionName(feature)</code> in appsettings.json.</text>
+                    }
                 </p>
 
                 @if (!EnabledToday(feature))
@@ -644,8 +654,15 @@ else
 
     // ---- keys ----
 
+    // The prefix decides whenever it can, and a hand-picked provider answers
+    // only the case where it cannot — the same predicate NeedsProviderChoice
+    // shows the dropdown on. Taking the override first let a pick made for one
+    // key outlive it: pasting a plainly-Anthropic key over the one that needed
+    // asking queued it under OpenRouter, with the dropdown gone from the page by
+    // then and the hint the only thing that could have said so. Measured in a
+    // browser on 2026-09-20; bUnit would have shown it too, nobody had asked.
     private AiProvider? keyProvider =>
-        keyProviderOverride ?? AiCatalog.InferProvider(keyDraft);
+        AiCatalog.InferProvider(keyDraft) ?? keyProviderOverride;
 
     private bool NeedsProviderChoice =>
         !string.IsNullOrWhiteSpace(keyDraft) && AiCatalog.InferProvider(keyDraft) is null;
@@ -670,9 +687,20 @@ else
         }
 
         var label = AiCatalog.For(provider).Label;
+
+        // "Recognised" is a claim about the prefix, and it is only ours to make
+        // when the prefix is what answered. A provider chosen from the dropdown
+        // was told to us — one line under the control that appeared precisely
+        // because the app could not work it out. The predicate is inference, not
+        // the override: keyed on the override, a stale pick would put the wrong
+        // word on a key the prefix had just answered for.
+        var how = AiCatalog.InferProvider(keyDraft) is null
+            ? $"Filed under {label}, as you picked"
+            : $"Recognised as {label}";
+
         return HasKeyAfterSave(provider)
-            ? $"Recognised as {label} — replaces the key already stored."
-            : $"Recognised as {label} — this will be a new key.";
+            ? $"{how} — replaces the key already stored."
+            : $"{how} — this will be a new key.";
     }
 
     private void AddKey()
@@ -726,8 +754,8 @@ else
                     // Both tails, because this chip is the only warning before an
                     // overwrite — the argument the receipt review makes for
                     // showing the stocked quantity beside the proposed one.
-                    ? new Chip(info.Provider, info.Label, $"{Show(stored!.Tail)} → {Show(tail)}", "replacing", "pending")
-                    : new Chip(info.Provider, info.Label, Show(tail), "new", "pending"));
+                    ? new Chip(info.Provider, info.Label, $"{Show(stored!.Tail)} → {Show(tail, pending: true)}", "replacing", "pending")
+                    : new Chip(info.Provider, info.Label, Show(tail, pending: true), "new", "pending"));
                 continue;
             }
 
@@ -743,7 +771,11 @@ else
     // the key, so it shows nothing rather than most of it.
     private static string? Tail(string key) => key.Length >= 12 ? key[^4..] : null;
 
-    private static string Show(string? tail) => tail is null ? "stored" : $"…{tail}";
+    // The stand-in for a key too short to have a tail, and the two words differ
+    // on purpose: "stored" is a fact about a key the database already holds, so
+    // a chip for a key nobody has saved yet read "Anthropic API stored new".
+    private static string Show(string? tail, bool pending = false) =>
+        tail is null ? (pending ? "typed" : "stored") : $"…{tail}";
 
     // ---- dirty tracking ----
 

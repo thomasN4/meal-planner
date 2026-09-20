@@ -87,3 +87,15 @@
 .pick-remove:focus-visible {
     color: var(--bs-body-color);
 }
+
+/* The same ring .key-remove spells out in Settings.razor.css, and the twin of
+   that rule: app.css's two-stop ring keys on .btn, and a bare glyph is left with
+   the browser's hairline default while every other control on the page rings.
+   Inner stop --bs-secondary-bg, because a halo has to be the ground the button
+   sits on and that ground is the chip. Keep the two in step. */
+.pick-remove:focus-visible {
+    outline: none;
+    border-radius: 0.125rem;
+    box-shadow: 0 0 0 0.1rem var(--bs-secondary-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}

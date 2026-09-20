@@ -364,13 +364,23 @@ design: it serves a trusted home LAN.
     beat `sk-`), which is a property of the table rather than of an `if` ladder.
     The guess is always stated in words before it is committed; an unrecognised
     prefix reveals a dropdown and is **never refused**, because refusing breaks
-    the day a provider changes its prefix. Keys are plaintext in
-    `mealplanner.db` — the honest consequence of a no-auth LAN app. What is
-    guaranteed is that the key never leaves the service: `GetAsync` returns
-    `CredentialStatus`, which **has no key field**, so a page cannot render one
-    by accident. There is deliberately no MCP tool for settings; the control is
-    the absence of the code path, same argument as `reviewer-open-pr.sh` not
-    existing.
+    the day a provider changes its prefix. **The prefix decides whenever it
+    can, and the dropdown answers only the case where it cannot** — one
+    predicate, the same one that shows the dropdown. Read the other way round
+    (`override ?? inferred`) a pick made for one key outlives it: paste an
+    unrecognised key, pick a provider, then paste a plainly-Anthropic key over
+    it, and that key queues under the old pick with the dropdown gone from the
+    page, so the hint is the only thing that could say so. And the hint keys on
+    the same predicate: **"Recognised as X" is a claim about the prefix**, only
+    ours to make when the prefix answered — a provider taken from the dropdown
+    reads "Filed under X, as you picked", one line under the control that
+    appeared precisely because the app could not work it out. Keys are
+    plaintext in `mealplanner.db` — the honest consequence of a no-auth LAN
+    app. What is guaranteed is that the key never leaves the service:
+    `GetAsync` returns `CredentialStatus`, which **has no key field**, so a
+    page cannot render one by accident. There is deliberately no MCP tool for
+    settings; the control is the absence of the code path, same argument as
+    `reviewer-open-pr.sh` not existing.
   - **Chips carry a word as well as a shape** (`new` / `replacing` / `clearing`),
     and a replacing chip shows **both** tails — it is the only warning before an
     overwrite, the same argument the receipt review makes for its effect badge.
