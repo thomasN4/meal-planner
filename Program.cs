@@ -72,6 +72,11 @@ builder.Services.AddSingleton<IApiModelClient>(sp =>
 builder.Services.AddSingleton<IApiModelClient>(sp =>
     new OpenAiCompatibleClient(AiProvider.OpenRouter, sp.GetRequiredService<IHttpClientFactory>()));
 
+// Reads OpenRouter's public model list so /settings can say whether a typed id is
+// real. It borrows the openrouter client above and sends no key — the check has to
+// work before one is stored.
+builder.Services.AddSingleton<IOpenRouterCatalog, OpenRouterCatalog>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()

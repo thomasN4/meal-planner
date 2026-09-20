@@ -22,11 +22,13 @@ internal sealed class PageHarness : BunitContext
     private PageHarness(
         InventoryHarness inventory,
         FakeRecipeGenerator generator,
-        FakeReceiptScanner scanner)
+        FakeReceiptScanner scanner,
+        FakeOpenRouterCatalog catalog)
     {
         _inventory = inventory;
         Generator = generator;
         Scanner = scanner;
+        Catalog = catalog;
         Recipes = inventory.NewRecipeService();
         // Handed the page's own option instances, so a test that changes a
         // default before rendering changes what the service falls back to.
@@ -41,6 +43,9 @@ internal sealed class PageHarness : BunitContext
         Services.AddSingleton<IRecipeGenerator>(generator);
         Services.AddSingleton(Options.Create(RecipeOptions));
         Services.AddSingleton<IReceiptScanner>(scanner);
+        // Faked for the same reason the other two are: the suite never reaches a
+        // provider, and OpenRouterCatalog's own tests cover the real one.
+        Services.AddSingleton<IOpenRouterCatalog>(catalog);
         Services.AddSingleton(Options.Create(ScanOptions));
         Services.AddSingleton(Settings);
         // Only Recipe and Scan options were registered before the settings page
@@ -67,6 +72,9 @@ internal sealed class PageHarness : BunitContext
     public FakeRecipeGenerator Generator { get; }
 
     public FakeReceiptScanner Scanner { get; }
+
+    /// <summary>What /settings gets back when it checks a typed model id.</summary>
+    public FakeOpenRouterCatalog Catalog { get; }
 
     /// <summary>
     /// Mutable up until the page is rendered, so a test can switch recipe
@@ -100,7 +108,11 @@ internal sealed class PageHarness : BunitContext
     public Task<int> CountAsync() => _inventory.CountAsync();
 
     public static async Task<PageHarness> CreateAsync() =>
-        new(await InventoryHarness.CreateAsync(), new FakeRecipeGenerator(), new FakeReceiptScanner());
+        new(
+            await InventoryHarness.CreateAsync(),
+            new FakeRecipeGenerator(),
+            new FakeReceiptScanner(),
+            new FakeOpenRouterCatalog());
 
     /// <summary>
     /// Renders the inventory page as the app hosts it.
@@ -247,5 +259,46 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
         }
 
         return new ScanResult(Result, Warning);
+    }
+}
+
+/// <summary>
+/// Stands in for <see cref="OpenRouterCatalog"/> without a network. The verdict is
+/// whatever a test sets; <see cref="OpenRouterCatalogTests"/> covers working the
+/// real one out from OpenRouter's answer.
+/// </summary>
+internal sealed class FakeOpenRouterCatalog : IOpenRouterCatalog
+{
+    private readonly List<string> _asked = [];
+
+    /// <summary>Returns a Listed, fully-capable verdict unless a test says otherwise.</summary>
+    public Func<string, ModelIdCheck> Answer { get; set; } = Listed;
+
+    public IReadOnlyList<string> Asked
+    {
+        get
+        {
+            lock (_asked)
+            {
+                return _asked.ToArray();
+            }
+        }
+    }
+
+    public static ModelIdCheck Listed(string id) =>
+        new(ModelIdVerdict.Listed, id, $"Fake: {id}", true, true, true, true, []);
+
+    public static ModelIdCheck NotListed(string id, params string[] suggestions) =>
+        new(ModelIdVerdict.NotListed, id, null, false, false, false, false, suggestions);
+
+    public Task<ModelIdCheck> CheckAsync(string? modelId, CancellationToken ct = default)
+    {
+        var id = modelId?.Trim() ?? string.Empty;
+        lock (_asked)
+        {
+            _asked.Add(id);
+        }
+
+        return Task.FromResult(id.Length == 0 ? ModelIdCheck.Blank : Answer(id));
     }
 }

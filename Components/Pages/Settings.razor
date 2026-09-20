@@ -8,6 +8,7 @@
 @inject IOptions<CategorizationOptions> ClassifyOptions
 @inject IOptions<RecipeGenerationOptions> RecipeOptions
 @inject IOptions<ReceiptScanningOptions> ScanOptions
+@inject IOpenRouterCatalog Catalog
 @inject IJSRuntime JS
 @inject ILogger<Settings> Logger
 
@@ -269,11 +270,96 @@ else
                         <input class="form-control model-other"
                                id="model-other-@feature"
                                maxlength="100"
+                               @ref="modelIdBoxes[feature]"
                                @bind="draft.Model"
-                               @bind:event="oninput" />
+                               @bind:event="oninput"
+                               @bind:after="@(() => StartCheck(feature, DebounceMilliseconds))" />
                         <div class="form-text">
-                            Typed exactly as the provider spells it. Nothing checks it.
+                            @if (draft.Provider == AiProvider.OpenRouter)
+                            {
+                                <text>Typed exactly as OpenRouter spells it &mdash; checked
+                                against OpenRouter's public model list.</text>
+                            }
+                            else
+                            {
+                                @* Still true everywhere else: OpenAI's and Anthropic's
+                                   model lists both need a key, so there is nothing to
+                                   check against before one is stored. *@
+                                <text>Typed exactly as the provider spells it. Nothing checks it.</text>
+                            }
                         </div>
+
+                        @* aria-live="polite", not a second role=status (the page has
+                           exactly one and it belongs to save feedback) and not
+                           role=alert, which is assertive and would interrupt a screen
+                           reader on every debounce tick. *@
+                        @if (draft.Provider == AiProvider.OpenRouter)
+                        {
+                            <div class="model-check small mt-1" aria-live="polite">
+                                @if (checking.Contains(feature))
+                                {
+                                    <span class="text-muted">Checking&hellip;</span>
+                                }
+                                else if (checks.GetValueOrDefault(feature) is { } check)
+                                {
+                                    @if (check.Verdict == ModelIdVerdict.Listed && UnusableBecause(feature, check) is { } fault)
+                                    {
+                                        <span class="model-warn">
+                                            &#9888; <b>@check.Name</b> is listed, but @fault
+                                        </span>
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.Listed)
+                                    {
+                                        <span class="model-ok">
+                                            &#10003; OpenRouter lists this as <b>@check.Name</b>.@EffortAside(draft, check)
+                                        </span>
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.NotListed)
+                                    {
+                                        @* Says what saving anyway costs rather than
+                                           refusing, the same posture as the needs-key
+                                           alert: AiCatalog is not a whitelist, and a
+                                           check that blocks breaks the day OpenRouter
+                                           adds a model faster than we read about it. *@
+                                        <span class="model-warn">
+                                            &#9888; OpenRouter doesn't list &ldquo;@check.Id&rdquo;.
+                                            Saving it is allowed &mdash; the call will fail.
+                                        </span>
+                                        @if (check.Suggestions.Count > 0)
+                                        {
+                                            @* The gap before each id is a CSS margin on
+                                               .model-suggestion, not a space in the markup.
+                                               Blazor collapses whitespace around an element
+                                               boundary, and a trailing space inside this span
+                                               survives into the DLL's markup literal and still
+                                               renders as "Did you meananthropic/…" — measured in
+                                               a browser at 10x. bUnit cannot see the margin, so
+                                               the gap is a browser-only claim. *@
+                                            <span class="text-muted">Did you mean</span>
+                                            @for (var i = 0; i < check.Suggestions.Count; i++)
+                                            {
+                                                var suggestion = check.Suggestions[i];
+                                                @* Never btn-primary: Save is the page's
+                                                   only one, and a test counts them. *@
+                                                <button type="button"
+                                                        class="btn btn-link btn-sm p-0 align-baseline model-suggestion"
+                                                        @onclick="@(() => Adopt(feature, suggestion))">@suggestion</button><span class="text-muted">@(i < check.Suggestions.Count - 1 ? "," : "?")</span>
+                                            }
+                                        }
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.Unchecked)
+                                    {
+                                        @* Not the same thing as "we looked and it is
+                                           not there", and must never be said as if it
+                                           were. *@
+                                        <span class="text-muted">
+                                            Couldn't reach OpenRouter to check this id.
+                                            It will be saved exactly as typed.
+                                        </span>
+                                    }
+                                }
+                            </div>
+                        }
                     </div>
                 }
 
@@ -361,6 +447,23 @@ else
     private bool statusIsError;
     private CancellationTokenSource? statusCts;
 
+    // ---- the OpenRouter model-id check ----
+
+    /// <summary>
+    /// Long enough that a check is one round trip per word rather than per letter,
+    /// short enough that the answer lands before the eye leaves the box.
+    /// </summary>
+    private const int DebounceMilliseconds = 400;
+
+    private readonly Dictionary<AiFeature, ModelIdCheck> checks = [];
+    private readonly Dictionary<AiFeature, CancellationTokenSource> checkCts = [];
+    private readonly HashSet<AiFeature> checking = [];
+
+    // Three fixed keys, so unlike the row editor's `pencils` there is nothing to
+    // prune: a feature's entry is simply overwritten on the next render.
+    private readonly Dictionary<AiFeature, ElementReference> modelIdBoxes = [];
+    private AiFeature? focusModelId;
+
     // Same length-scaled dwell as Inventory.razor's. A knowingly duplicated ~40
     // lines: extracting it would mean editing that page in a pass meant to be
     // additive. If a third page grows one, extract then.
@@ -371,6 +474,12 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (focusModelId is { } adopted && modelIdBoxes.TryGetValue(adopted, out var box))
+        {
+            focusModelId = null;
+            await box.FocusAsync();
+        }
+
         if (!firstRender)
         {
             return;
@@ -429,6 +538,13 @@ else
         }
 
         draft.Effort = SettleEffort(draft);
+
+        // ChooseProvider deliberately keeps an IsOther draft's typed id across a
+        // switch, so without this an OpenRouter verdict would sit under an OpenAI
+        // card claiming something OpenRouter never said. Re-checks immediately when
+        // the switch lands *on* OpenRouter with an id already in the box.
+        ClearCheck(feature);
+        StartCheck(feature, delay: 0);
     }
 
     private void ChooseModel(AiFeature feature, ChangeEventArgs e)
@@ -448,6 +564,10 @@ else
         }
 
         draft.Effort = SettleEffort(draft);
+
+        // Picking Other… blanks the box, and picking a curated model leaves the
+        // check with nothing to describe. Either way the old verdict is stale.
+        ClearCheck(feature);
     }
 
     private void ChooseEffort(AiFeature feature, ChangeEventArgs e) =>
@@ -771,6 +891,133 @@ else
         _ => ScanOptions.Value.Enabled,
     };
 
+    // ---- the OpenRouter model-id check ----
+
+    /// <summary>
+    /// Arms a check, replacing any one already pending for this feature. Synchronous
+    /// and complete on return: the waiting happens in <see cref="RunCheckAsync"/>,
+    /// which has to outlive the keystroke that armed it — exactly the shape
+    /// <c>ShowStatus</c> and its timer take.
+    /// </summary>
+    private void StartCheck(AiFeature feature, int delay)
+    {
+        CancelCheck(feature);
+
+        // Only an OpenRouter "Other…" box has anything to check against. Every other
+        // provider's model list needs a key, which is why this feature is OpenRouter's
+        // alone (see OpenRouterCatalog).
+        var draft = drafts[feature];
+        if (draft.Provider != AiProvider.OpenRouter || !draft.IsOther)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(draft.Model))
+        {
+            checks.Remove(feature);
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        checkCts[feature] = cts;
+        checking.Add(feature);
+
+        // The page's second deliberately unawaited call. Both of AGENTS.md's
+        // objections to fire-and-forget are answered in the method below.
+        _ = RunCheckAsync(feature, draft.Model, delay, cts.Token);
+    }
+
+    private async Task RunCheckAsync(AiFeature feature, string modelId, int delay, CancellationToken token)
+    {
+        try
+        {
+            if (delay > 0)
+            {
+                await Task.Delay(delay, token);
+            }
+
+            var check = await Catalog.CheckAsync(modelId, token);
+            token.ThrowIfCancellationRequested();
+
+            checks[feature] = check;
+            checking.Remove(feature);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer keystroke, a provider change, or disposal. The successor has
+            // already re-added this feature to `checking`, so don't touch it here.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish.
+            checking.Remove(feature);
+            Logger.LogWarning(ex, "Could not check the OpenRouter model id for {Feature}", feature);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CancelCheck(AiFeature feature)
+    {
+        if (checkCts.Remove(feature, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checking.Remove(feature);
+    }
+
+    private void ClearCheck(AiFeature feature)
+    {
+        CancelCheck(feature);
+        checks.Remove(feature);
+    }
+
+    private void Adopt(AiFeature feature, string modelId)
+    {
+        drafts[feature].Model = modelId;
+
+        // A deliberate pick rather than typing, so no debounce.
+        StartCheck(feature, delay: 0);
+
+        // The button that held focus has just removed itself from the page, so focus
+        // would otherwise fall to <body>. Same reasoning as the receipt review's adopt.
+        focusModelId = feature;
+    }
+
+    /// <summary>
+    /// Why a listed model still will not do, or null when it will. Composed one clause
+    /// per missing capability rather than picked from a ladder — the shape
+    /// <c>InventoryChange.Describe()</c> was forced into twice.
+    /// </summary>
+    private static string? UnusableBecause(AiFeature feature, ModelIdCheck check)
+    {
+        var faults = new List<string>();
+
+        if (!check.SupportsStructuredOutput)
+        {
+            faults.Add($"OpenRouter doesn't advertise structured output for it. " +
+                       $"{Label(feature)} sends a JSON schema, so answers are likely to come back as prose.");
+        }
+
+        if (feature == AiFeature.ReceiptScanning && !check.AcceptsImages)
+        {
+            faults.Add("it doesn't accept images. Receipt scanning sends a photo or a PDF.");
+        }
+
+        return faults.Count == 0 ? null : string.Join(" Also, ", faults);
+    }
+
+    /// <summary>
+    /// An effort the model has no knob for is a setting that silently does nothing —
+    /// worth a clause, not a warning, since the answer still arrives.
+    /// </summary>
+    private static string? EffortAside(Draft draft, ModelIdCheck check) =>
+        draft.Effort is not null && !check.SupportsEffort
+            ? " It takes no reasoning effort, so the effort setting will be ignored."
+            : null;
+
     // ---- status ----
 
     private void ShowStatus(string message, bool isError = false)
@@ -812,12 +1059,21 @@ else
     }
 
     /// <summary>
-    /// Only the status timer. There is no notifier subscription here on purpose
-    /// (see <see cref="AiSettingsService"/>) — don't delete this as dead code.
+    /// The status timer and any pending model-id check. There is no notifier
+    /// subscription here on purpose (see <see cref="AiSettingsService"/>) — don't
+    /// delete this as dead code.
     /// </summary>
     public void Dispose()
     {
         statusCts?.Cancel();
         statusCts?.Dispose();
+
+        foreach (var pending in checkCts.Values)
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checkCts.Clear();
     }
 }

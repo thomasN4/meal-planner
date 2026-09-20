@@ -105,3 +105,43 @@
 .card-dirty {
     box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
 }
+
+/* The verdict on a typed OpenRouter model id. Every state carries a glyph and a
+   whole sentence as well as a colour — the .key-flag rule, and the reason it
+   survives Dark Reader, greyscale and a washed-out panel. */
+.model-check {
+    /* Fits between the box's .form-text and the next control without the card
+       growing a gap when there is nothing to say. */
+    line-height: 1.5;
+}
+
+/* The -text-emphasis pair rather than --bs-success / --bs-warning: those are
+   fixed fills meant to sit *under* text, and both drop near 2:1 as body colour
+   on --bs-body-bg. The emphasis tokens are the ones Bootstrap 5.3 redefines per
+   theme for exactly this. */
+.model-ok {
+    color: var(--bs-success-text-emphasis);
+}
+
+.model-warn {
+    color: var(--bs-warning-text-emphasis);
+}
+
+/* A link, not a .btn: it sits inside a sentence, and Bootstrap's button padding
+   would break the line box. No inset bar — nothing here is a selected state,
+   which is what that idiom marks. It still has to ring on focus, because
+   app.css's .btn:focus is the only rule giving it one and .btn-link keeps it. */
+/* The gap between "Did you mean" and the first id, and after each comma. A margin
+   rather than a space in the markup: Blazor collapses whitespace at an element
+   boundary, so a trailing space inside the preceding span renders as
+   "Did you meananthropic/claude-opus-4" — measured in a browser at 10x, and
+   invisible to bUnit, which has no layout. */
+.model-suggestion {
+    margin-inline-start: 0.25rem;
+    text-decoration: underline;
+}
+
+.model-suggestion:focus-visible {
+    box-shadow: 0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}

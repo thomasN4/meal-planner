@@ -425,6 +425,256 @@ public class SettingsPageTests
     private static FeatureChoice Choice(AiSettings settings, AiFeature feature) =>
         settings.Features.First(f => f.Feature == feature);
 
+    // ---- the OpenRouter model-id check ----
+
+    [Fact]
+    public async Task A_listed_id_is_named_under_the_box()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "anthropic/claude-opus-5");
+
+        var line = WaitForCheck(cut, AiFeature.Categorization);
+        Assert.Contains("Fake: anthropic/claude-opus-5", line.TextContent, StringComparison.Ordinal);
+        Assert.Single(AllWithin(cut, AiFeature.Categorization, "span.model-ok"));
+    }
+
+    [Fact]
+    public async Task A_listed_model_that_cannot_do_structured_output_warns_and_names_the_feature()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = id =>
+            new ModelIdCheck(ModelIdVerdict.Listed, id, "Z.ai: GLM", false, true, true, true, []);
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "z-ai/glm-5.3-flashx");
+
+        var line = WaitForCheck(cut, AiFeature.Categorization);
+        Assert.Single(AllWithin(cut, AiFeature.Categorization, "span.model-warn"));
+        Assert.Contains("structured output", line.TextContent, StringComparison.Ordinal);
+        Assert.Contains("Ingredient classification", line.TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Only_receipt_scanning_is_warned_about_a_model_that_takes_no_images()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = id =>
+            new ModelIdCheck(ModelIdVerdict.Listed, id, "Text Only", true, false, false, true, []);
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.ReceiptScanning, "deepseek/deepseek-chat-v3.1");
+        Assert.Contains(
+            "doesn't accept images",
+            WaitForCheck(cut, AiFeature.ReceiptScanning).TextContent,
+            StringComparison.Ordinal);
+
+        // The same model is fine for the other two: they send no attachment, so a
+        // warning there would be noise about a capability nobody uses.
+        TypeOtherId(cut, AiFeature.RecipeGeneration, "deepseek/deepseek-chat-v3.1");
+        var recipes = WaitForCheck(cut, AiFeature.RecipeGeneration);
+        Assert.DoesNotContain("images", recipes.TextContent, StringComparison.Ordinal);
+        Assert.Single(AllWithin(cut, AiFeature.RecipeGeneration, "span.model-ok"));
+    }
+
+    [Fact]
+    public async Task An_unlisted_id_warns_without_blocking_the_save()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = id => FakeOpenRouterCatalog.NotListed(id, "anthropic/claude-opus-5");
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "anthropic/claude-opus-6");
+
+        var line = WaitForCheck(cut, AiFeature.Categorization);
+        Assert.Contains("doesn't list", line.TextContent, StringComparison.Ordinal);
+
+        // The suggestion is a button, so it can be adopted in a click rather than
+        // retyped. The *gap* before it is a CSS margin and deliberately not a space in
+        // the markup — Blazor collapses whitespace at an element boundary, which
+        // rendered "Did you meananthropic/claude-opus-4" in a browser. bUnit has no
+        // layout, so this test cannot see that gap and does not pretend to; the
+        // screenshot in the PR #38 report is what covers it.
+        Assert.Equal(
+            "anthropic/claude-opus-5",
+            Within(cut, AiFeature.Categorization, "button.model-suggestion").TextContent.Trim());
+
+        // Warns, never blocks — the posture the needs-key alert already takes, and
+        // the reason AiCatalog is not a whitelist.
+        Assert.False(cut.Find("button.save-settings").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task A_suggestion_rewrites_the_box_and_is_checked_again()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = id => id == "anthropic/claude-opus-5"
+            ? FakeOpenRouterCatalog.Listed(id)
+            : FakeOpenRouterCatalog.NotListed(id, "anthropic/claude-opus-5");
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "anthropic/claude-opus-6");
+        WaitForCheck(cut, AiFeature.Categorization);
+
+        Within(cut, AiFeature.Categorization, "button.model-suggestion").Click();
+
+        cut.WaitForAssertion(
+            () => Assert.Single(AllWithin(cut, AiFeature.Categorization, "span.model-ok")),
+            TimeSpan.FromSeconds(2));
+
+        var box = (IHtmlInputElement)Within(cut, AiFeature.Categorization, "input.model-other");
+        Assert.Equal("anthropic/claude-opus-5", box.Value);
+    }
+
+    [Fact]
+    public async Task An_unreachable_catalogue_says_so_rather_than_calling_the_id_wrong()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = ModelIdCheck.Unchecked;
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "anthropic/claude-opus-5");
+
+        var line = WaitForCheck(cut, AiFeature.Categorization);
+        Assert.Contains("Couldn't reach OpenRouter", line.TextContent, StringComparison.Ordinal);
+        Assert.Empty(AllWithin(cut, AiFeature.Categorization, "span.model-warn"));
+    }
+
+    [Fact]
+    public async Task No_other_provider_gets_a_check_line_or_a_request()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        // OpenAI's model list needs a key, so there is nothing to check against.
+        Within(cut, AiFeature.Categorization, "select.provider-select").Change(nameof(AiProvider.OpenAi));
+        Within(cut, AiFeature.Categorization, "select.model-select").Change("__other");
+        Within(cut, AiFeature.Categorization, "input.model-other").Input("gpt-6-astra");
+
+        Assert.Empty(AllWithin(cut, AiFeature.Categorization, "div.model-check"));
+        Assert.Contains(
+            "Nothing checks it",
+            Within(cut, AiFeature.Categorization, "div.form-text").TextContent,
+            StringComparison.Ordinal);
+        Assert.Empty(page.Catalog.Asked);
+    }
+
+    [Fact]
+    public async Task Switching_provider_drops_a_verdict_OpenRouter_never_gave()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "anthropic/claude-opus-5");
+        WaitForCheck(cut, AiFeature.Categorization);
+
+        // Honest about what holds this: the line is inside an
+        // `@if (draft.Provider == AiProvider.OpenRouter)`, so deleting ChooseProvider's
+        // ClearCheck leaves this green — the render guard is the thing under test, and
+        // the transition from a shown verdict to none is the regression path the
+        // never-rendered-at-all test below cannot cover. ClearCheck there is state
+        // hygiene, and the test that bites on a stale verdict is the next one.
+        Within(cut, AiFeature.Categorization, "select.provider-select").Change(nameof(AiProvider.OpenAi));
+
+        cut.WaitForAssertion(
+            () => Assert.Empty(AllWithin(cut, AiFeature.Categorization, "div.model-check")),
+            TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task Re_picking_Other_does_not_keep_the_verdict_about_the_id_it_just_cleared()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Catalog.Answer = id => FakeOpenRouterCatalog.NotListed(id);
+        var cut = page.RenderSettings();
+
+        TypeOtherId(cut, AiFeature.Categorization, "acme/frobnicator-9000");
+        Assert.Contains(
+            "doesn't list",
+            WaitForCheck(cut, AiFeature.Categorization).TextContent,
+            StringComparison.Ordinal);
+
+        // Away to a curated model and back. The box comes back empty, and a verdict
+        // about the id it used to hold would be a sentence about nothing on screen.
+        Within(cut, AiFeature.Categorization, "select.model-select").Change("anthropic/claude-opus-5");
+        Within(cut, AiFeature.Categorization, "select.model-select").Change("__other");
+
+        cut.WaitForAssertion(
+            () => Assert.Equal(
+                string.Empty,
+                Within(cut, AiFeature.Categorization, "div.model-check").TextContent.Trim()),
+            TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// Puts a feature on OpenRouter's free-text box and types an id into it. The
+    /// check is debounced, so every caller reads the answer through
+    /// <see cref="WaitForCheck"/>.
+    /// </summary>
+    private static void TypeOtherId(IRenderedComponent<Settings> cut, AiFeature feature, string id)
+    {
+        Within(cut, feature, "select.provider-select").Change(nameof(AiProvider.OpenRouter));
+        Within(cut, feature, "select.model-select").Change("__other");
+
+        // The box arrives on a render that can still be queued behind another
+        // feature's finished check, so wait for it rather than assume the DOM this
+        // statement reads is the one the last statement caused.
+        cut.WaitForElement(
+            $"div.feature-card[data-feature={feature}] input.model-other",
+            TimeSpan.FromSeconds(2));
+        Within(cut, feature, "input.model-other").Input(id);
+    }
+
+    /// <summary>
+    /// One scoped selector re-queried from the component root, rather than
+    /// <c>Card(…).QuerySelector(…)</c>.
+    /// <para>
+    /// These are the first tests here whose page re-renders <i>between</i> two
+    /// statements: the debounced check lands out of band through
+    /// <c>InvokeAsync(StateHasChanged)</c>, with no click to hang it off. An element
+    /// wrapper captured before that render answers from the DOM as it was — measured,
+    /// <c>Card(…).QuerySelectorAll("div.model-check")</c> returned one element for a
+    /// card whose live markup held none. The tell is a count and an <c>OuterHtml</c>
+    /// of the same node disagreeing.
+    /// </para>
+    /// </summary>
+    private static IElement Within(IRenderedComponent<Settings> cut, AiFeature feature, string selector) =>
+        cut.Find($"div.feature-card[data-feature={feature}] {selector}");
+
+    /// <summary>
+    /// <inheritdoc cref="Within" path="/summary/node()"/>
+    /// <para>
+    /// <c>cut.Nodes</c> rather than <c>cut.FindAll</c>, and that is load-bearing:
+    /// <c>FindAll</c> answers from the DOM snapshot bUnit last parsed, so a render
+    /// nothing has forced it to re-read is invisible to it. Measured here — the same
+    /// selector reported one element, then zero once an intervening
+    /// <see cref="Within"/> call had forced the re-parse. <c>Nodes</c> re-parses.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<IElement> AllWithin(
+        IRenderedComponent<Settings> cut,
+        AiFeature feature,
+        string selector) =>
+        cut.Nodes.QuerySelectorAll($"div.feature-card[data-feature={feature}] {selector}");
+
+    /// <summary>
+    /// Two seconds against a 400ms debounce. bUnit polls on render and the check
+    /// re-renders through InvokeAsync, so this settles as soon as the answer lands
+    /// rather than sleeping.
+    /// </summary>
+    private static IElement WaitForCheck(IRenderedComponent<Settings> cut, AiFeature feature)
+    {
+        cut.WaitForAssertion(
+            () => Assert.DoesNotContain(
+                "Checking",
+                Within(cut, feature, "div.model-check").TextContent,
+                StringComparison.Ordinal),
+            TimeSpan.FromSeconds(2));
+
+        return Within(cut, feature, "div.model-check");
+    }
+
     private static IElement Card(IRenderedComponent<Settings> cut, AiFeature feature) =>
         cut.Find($"div.feature-card[data-feature={feature}]");
 

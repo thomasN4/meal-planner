@@ -392,6 +392,47 @@ design: it serves a trusted home LAN.
     the `claude-api` skill, and the Claude 5 family takes **bare ids with no date
     suffix** (`claude-haiku-4-5` also genuinely *rejects* an effort setting, which
     is what `SupportsEffort: false` exists for).
+  - **The typed "Other…" id is checked, and only OpenRouter's can be.**
+    `OpenRouterCatalog` (`IOpenRouterCatalog`) reads
+    `GET https://openrouter.ai/api/v1/models`, which is **public and
+    unauthenticated** — OpenAI's and Anthropic's model lists both need a key, so
+    their boxes keep "Nothing checks it." and that sentence stays true. Decided
+    rather than fallen into:
+    - **no `Authorization` header**, pinned by a test. The check has to work
+      *before* a key is stored, which is exactly when someone is setting a feature
+      up and most likely to mistype, and a key would make a failure ambiguous
+      between a bad id and a bad key — the one distinction the verdicts exist to
+      keep;
+    - **the whole list, not `/models/{id}/endpoints`.** The per-id route answers
+      200/404 cleanly and costs 1–10 KB against 740 KB, but it can only ever say
+      *no*. The list is what makes "did you mean…" possible, and the capability
+      flags come with it free;
+    - **"valid" means usable here, not merely real.** The request sends
+      `response_format: json_schema` with `strict` and
+      `provider.require_parameters`, so the flag that decides whether a listed id
+      works is `structured_outputs` — measured 2026-09-19, 362 of 447 models carry
+      it, and `z-ai/glm-5.3-flashx` is a real id whose every answer would come back
+      as prose. Receipt scanning also needs `image` in
+      `architecture.input_modalities`, and the effort control is moot without
+      `reasoning`;
+    - **it warns and never blocks**, the needs-key alert's posture and the reason
+      `AiCatalog` is not a whitelist: a check that refuses breaks the day
+      OpenRouter adds a model faster than we read about it. `Unchecked` is a third
+      verdict, never folded into `NotListed` — "we could not ask" said as "it does
+      not exist" is a wrong answer stated confidently. A failed fetch keeps the
+      **last good snapshot** past its TTL for the same reason; only a cold cache
+      reports Unchecked;
+    - the line is **`aria-live="polite"`**, not a second `role="status"` (the page
+      has exactly one and a test counts it) and not `role="alert"`, which is
+      assertive and would interrupt a screen reader on every debounce tick. It
+      renders below the picker row, never in it — every `div.row` here must sum to
+      12 `col-md-*`. The suggestion buttons must not be `btn-primary`; Save is the
+      page's only one, same trap as the recipe role buttons;
+    - the 400 ms debounce and the catalogue's 10 s fetch timeout are the **page's**
+      clocks, not the feature's 90/180/120 s. Waiting three minutes to mention a
+      typo is the same as saying nothing. There is deliberately **no check on page
+      load**: a stored id says nothing until someone touches the box, which keeps
+      /settings off the network for a visit that changes nothing.
 
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
@@ -512,6 +553,21 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+    - **Two bUnit traps, both of which produce a confident wrong answer**, and both
+      new here because these are the first page tests whose component re-renders
+      *between two statements* — the debounced check lands out of band through
+      `InvokeAsync(StateHasChanged)`, with no click to hang it off.
+      - **An element wrapper captured before that render answers from the DOM as it
+        was.** Measured: `Card(…).QuerySelectorAll("div.model-check")` returned one
+        element for a card whose live markup held none, while `OuterHtml` on the same
+        node was correct. A count and an `OuterHtml` disagreeing is the tell. Scope
+        the selector and re-query from the component (`cut.Find($"…card… {sel}")`),
+        and read collections through `cut.Nodes`.
+      - **`.Change()` returns before the render it causes has landed.** The first
+        query after one reads the old DOM, and the second reads the new one — so
+        adding a debug print "fixed" the failure, which is how you would talk
+        yourself out of a real bug. `WaitForElement` / `WaitForAssertion` around
+        anything read after a change; never a bare assert.
   - **`UploadFiles` blocks until the handler it triggers has finished**, unlike
     `Click()`. Any test that parks a scan on a gate and then wants to click
     something has to upload on its own thread (`Task.Run`) — inline, there is no
