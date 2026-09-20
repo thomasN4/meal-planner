@@ -425,6 +425,78 @@ public class SettingsPageTests
     private static FeatureChoice Choice(AiSettings settings, AiFeature feature) =>
         settings.Features.First(f => f.Feature == feature);
 
+    // ---- the empty "Other…" box ----
+
+    [Fact]
+    public async Task An_unfilled_Other_box_is_not_a_pending_change()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        Select(cut, AiFeature.Categorization, "model-select").Change("__other");
+
+        // Picking Other… blanks the model, and a blank model is the one thing the
+        // service refuses. Counting it as a change armed Save to throw.
+        Assert.True(cut.Find("button.save-settings").HasAttribute("disabled"));
+        Assert.Empty(AllWithin(cut, AiFeature.Categorization, "span.card-dirty-flag"));
+        Assert.Contains("Nothing changed yet", cut.Find("span.dirty-hint").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unfilled_Other_box_says_what_the_feature_keeps_meanwhile()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.ClassifyOptions.Model = "sonnet";
+        var cut = page.RenderSettings();
+
+        Select(cut, AiFeature.Categorization, "model-select").Change("__other");
+
+        // Without this the card sits at "Other…" with an empty box while the hint
+        // says nothing changed, and the two together read as a broken page.
+        var line = Within(cut, AiFeature.Categorization, "div.model-required").TextContent;
+        Assert.Contains("Type a model id", line, StringComparison.Ordinal);
+        Assert.Contains("ingredient classification still runs", line, StringComparison.Ordinal);
+        Assert.Contains("sonnet", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Typing_in_the_Other_box_makes_the_card_pending_again()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        Select(cut, AiFeature.Categorization, "model-select").Change("__other");
+        Within(cut, AiFeature.Categorization, "input.model-other").Input("some/model");
+
+        Assert.False(cut.Find("button.save-settings").HasAttribute("disabled"));
+        Assert.Single(AllWithin(cut, AiFeature.Categorization, "span.card-dirty-flag"));
+        Assert.Empty(AllWithin(cut, AiFeature.Categorization, "div.model-required"));
+    }
+
+    [Fact]
+    public async Task An_unfilled_box_on_one_card_does_not_stop_another_card_saving()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        // One card left unfinished, one genuinely changed. This threw
+        // ArgumentException out of the write loop and reported "Could not save.
+        // Nothing was written." — for a save that had nothing wrong with it.
+        Select(cut, AiFeature.Categorization, "model-select").Change("__other");
+        Select(cut, AiFeature.RecipeGeneration, "provider-select").Change(nameof(AiProvider.AnthropicApi));
+
+        await cut.Find("button.save-settings").ClickAsync(new());
+
+        Assert.Contains("Saved 1 change", cut.Find("div[role=status]").TextContent, StringComparison.Ordinal);
+
+        var saved = await page.OutOfCircuitSettings().GetFeatureAsync(AiFeature.RecipeGeneration);
+        Assert.Equal(AiProvider.AnthropicApi, saved.Provider);
+
+        // And the unfinished card was left exactly as it was, not half-written.
+        var untouched = await page.OutOfCircuitSettings().GetFeatureAsync(AiFeature.Categorization);
+        Assert.True(untouched.IsDefault);
+    }
+
     // ---- the OpenRouter model-id check ----
 
     [Fact]

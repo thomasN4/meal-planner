@@ -289,6 +289,20 @@ else
                             }
                         </div>
 
+                        @* Rendered for every provider, because an empty box is not an
+                           OpenRouter question: SaveFeatureAsync refuses a blank model
+                           whoever is being asked. Says what the feature keeps meanwhile,
+                           so "Nothing changed yet" under a dropdown visibly reading
+                           "Other…" is explained rather than merely true. *@
+                        @if (string.IsNullOrWhiteSpace(draft.Model))
+                        {
+                            <div class="form-text model-required">
+                                Type a model id. Nothing on this card is saved until you do
+                                &mdash; @Label(feature).ToLowerInvariant() still runs
+                                <code>@Stored(feature).Model</code>.
+                            </div>
+                        }
+
                         @* aria-live="polite", not a second role=status (the page has
                            exactly one and it belongs to save feedback) and not
                            role=alert, which is assertive and would interrupt a screen
@@ -739,6 +753,21 @@ else
     private bool Dirty(AiFeature feature)
     {
         var draft = drafts[feature];
+
+        // An "Other…" box nobody has typed in is an unfinished card, not a
+        // changed one. Picking Other… blanks the model, and a blank model is the
+        // one thing SaveFeatureAsync refuses outright — so counting it as a change
+        // armed Save to throw, and the catch-all reported "Could not save. Nothing
+        // was written." without naming the card or the reason. This is the single
+        // place that decides: it drives the Unsaved flag, the painted card edge,
+        // the pending count, whether Save is enabled at all, and which features
+        // the write loop visits. The card says what it is waiting for, so sitting
+        // it out is visible rather than silent.
+        if (draft.IsOther && string.IsNullOrWhiteSpace(draft.Model))
+        {
+            return false;
+        }
+
         var stored = Stored(feature);
         return draft.Provider != stored.Provider
             || !string.Equals(draft.Model.Trim(), stored.Model, StringComparison.Ordinal)

@@ -392,6 +392,22 @@ design: it serves a trusted home LAN.
     the `claude-api` skill, and the Claude 5 family takes **bare ids with no date
     suffix** (`claude-haiku-4-5` also genuinely *rejects* an effort setting, which
     is what `SupportsEffort: false` exists for).
+  - **An unfilled "Other…" box is an unfinished card, not a changed one.**
+    Picking Other… blanks the model, and a blank model is the one thing
+    `SaveFeatureAsync` refuses outright — so counting it as a change armed Save to
+    throw `ArgumentException` out of the write loop, and the catch-all answered
+    "Could not save. Nothing was written." A save holding one perfectly good change
+    on another card reported exactly that, naming neither the card nor the reason.
+    `Dirty(feature)` is the single place this is decided, and returning false there
+    covers all of it at once: the Unsaved flag, the painted card edge, the pending
+    count, whether Save is enabled, and which features the loop visits. The card
+    then has to **say** it is sitting out — `div.model-required`, rendered for
+    *every* provider because a blank model is refused whoever is being asked, and
+    naming what the feature keeps meanwhile, so "Nothing changed yet" under a
+    dropdown visibly reading "Other…" is explained rather than merely true.
+    Blocking Save instead was the wrong shape: one unfinished card would hold the
+    others' legitimate changes hostage, and the needs-key alert already sets the
+    precedent that a card warns without blocking the page.
   - **The typed "Other…" id is checked, and only OpenRouter's can be.**
     `OpenRouterCatalog` (`IOpenRouterCatalog`) reads
     `GET https://openrouter.ai/api/v1/models`, which is **public and
