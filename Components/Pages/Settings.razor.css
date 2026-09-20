@@ -85,7 +85,8 @@
 
 /* A bare glyph rather than a .btn, following .pick-remove: inside a chip,
    Bootstrap's button padding makes the chip twice the height of its text. */
-.key-remove {
+.key-remove,
+.key-check-button {
     padding: 0;
     border: 0;
     background: none;
@@ -94,8 +95,21 @@
 }
 
 .key-remove:hover,
-.key-remove:focus-visible {
+.key-remove:focus-visible,
+.key-check-button:hover,
+.key-check-button:focus-visible {
     color: var(--bs-body-color);
+}
+
+/* A word rather than a glyph (see the markup), so it needs the size the .key-flag
+   words next to it have — otherwise "Check" reads as the chip's loudest element. */
+.key-check-button {
+    font-size: 0.8125rem;
+}
+
+.key-check-button:disabled {
+    /* Bootstrap's .btn opacity rule does not reach a bare button. */
+    opacity: 0.55;
 }
 
 /* app.css's two-stop ring keys on .btn, and this is a bare glyph, so it was left
@@ -107,7 +121,8 @@
    The inner stop is --bs-secondary-bg, not --bs-body-bg: it is a halo, so it has
    to be the ground this button actually sits on, and that ground is the chip.
    Same split .key-chip.pending makes above, for the same reason. */
-.key-remove:focus-visible {
+.key-remove:focus-visible,
+.key-check-button:focus-visible {
     outline: none;
     border-radius: 0.125rem;
     box-shadow: 0 0 0 0.1rem var(--bs-secondary-bg),
@@ -135,11 +150,13 @@
    fixed fills meant to sit *under* text, and both drop near 2:1 as body colour
    on --bs-body-bg. The emphasis tokens are the ones Bootstrap 5.3 redefines per
    theme for exactly this. */
-.model-ok {
+.model-ok,
+.key-ok {
     color: var(--bs-success-text-emphasis);
 }
 
-.model-warn {
+.model-warn,
+.key-warn {
     color: var(--bs-warning-text-emphasis);
 }
 

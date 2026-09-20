@@ -459,6 +459,65 @@ design: it serves a trusted home LAN.
       typo is the same as saying nothing. There is deliberately **no check on page
       load**: a stored id says nothing until someone touches the box, which keeps
       /settings off the network for a visit that changes nothing.
+  - **A key is checked the same way, and it warns rather than blocking too.**
+    `ApiKeyChecker` (`IApiKeyChecker`) asks each provider whether a key is any
+    good, on its cheapest **auth-only** endpoint — Anthropic `GET /v1/models`
+    through the SDK, OpenAI `GET /v1/models`, OpenRouter `GET /api/v1/key` —
+    none of which bills a token. Nothing checked one before, so a real key with
+    a character deleted saved silently and surfaced days later as ingredients
+    stuck in `Other`. Decided rather than fallen into:
+    - **on Add, and on a `Check` button per chip, never as you type.** The
+      failure being caught is a key edited down to a broken one, so a debounce
+      would send every intermediate state out as a failed authentication, which
+      is what providers rate-limit. Same reason the SDK path sets
+      `MaxRetries = 0`: one click has to be one attempt. No check on page load
+      either — the model-id check's rule, for the same reason;
+    - **only 401 is a rejection.** 403 is usually a region block, an org
+      permission or a project-scoped key, and 429 is the provider being busy;
+      both arrive as `Unchecked` carrying their status, because a confident
+      wrong "refused" invites someone to delete a working key. Two things the
+      SDK path needs that the raw ones do not: `AnthropicIOException` is **not**
+      an `AnthropicApiException`, and the SDK's error-body reader throws
+      `InvalidOperationException` when something that is not Anthropic answers
+      (a proxy, a gateway). Its last catch is everything-but-cancellation for
+      that reason, and a test pins each;
+    - **the response body is never read — only the status.** Reusing
+      `OpenAiCompatibleClient.ErrorMessage` to put the provider's own sentence
+      on screen is the obvious tidy-up and is the leak: OpenAI's 401 echoes the
+      key back in masked form, and a short key is barely masked. It is also why
+      `ApiKeyCheck(Verdict, Provider, int? Status)` has **no string member** —
+      where `ResolvedModel` needs a `PrintMembers` override this needs nothing,
+      and a `string? Detail` is the change that breaks it;
+    - **two methods, because of the page boundary.** `CheckStoredAsync` reads
+      the key through `GetApiKeyAsync` *inside the service* and hands back only
+      a verdict, so the page goes on holding nothing but keys the user just
+      pasted. One key-taking method would have forced a page to fetch a stored
+      one, which is what `CredentialStatus` having no key field prevents;
+    - **a blank key must never reach the SDK.** Given none it resolves
+      `ANTHROPIC_API_KEY` / `ANTHROPIC_PROFILE` from the environment (verified
+      in the assembly), so a blank one would check *this machine's* credentials
+      and report a key nobody stored as accepted. The early `Blank` return is
+      the guard;
+    - **"accepted", never "works".** These endpoints authenticate; they do not
+      prove the key can pay, or that its scope covers what the features send. A
+      key with no credit passes here and 402s on the next real call. It is the
+      mirror of the catalogue's "valid means usable here, not merely real":
+      there the capability could be checked, here it cannot, so the sentence
+      must not imply it;
+    - **no cache, no TTL, no gate**, unlike the catalogue next door: one check
+      is one deliberate click, a cached "accepted" is a lie waiting to happen,
+      and the cache key would have to be either the provider (wrong the moment
+      a key is pasted over another) or the key itself, parked in a long-lived
+      singleton. **`ToggleKey` clears the verdict explicitly** — the region
+      walks `Chips()`, so a cleared key's line goes with its chip, but undoing
+      a pending key over a provider that *also* has a stored key leaves the
+      chip wearing a verdict about the key just dropped;
+    - the control is the **word `Check`**, not a glyph: the chip's glyph slot
+      is taken by `✕`/`↶`, and nothing unambiguously means "ask the provider
+      whether this credential works". Measured in a browser 2026-09-20 — three
+      bogus keys, one per provider, all three answered 401 and read "refused
+      this key (401)"; behind a dead proxy the same key read "Couldn't reach…"
+      in muted text with Save still enabled.
 
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and

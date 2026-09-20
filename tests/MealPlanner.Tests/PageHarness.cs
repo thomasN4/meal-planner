@@ -23,12 +23,14 @@ internal sealed class PageHarness : BunitContext
         InventoryHarness inventory,
         FakeRecipeGenerator generator,
         FakeReceiptScanner scanner,
-        FakeOpenRouterCatalog catalog)
+        FakeOpenRouterCatalog catalog,
+        FakeApiKeyChecker keyChecker)
     {
         _inventory = inventory;
         Generator = generator;
         Scanner = scanner;
         Catalog = catalog;
+        KeyChecker = keyChecker;
         Recipes = inventory.NewRecipeService();
         // Handed the page's own option instances, so a test that changes a
         // default before rendering changes what the service falls back to.
@@ -46,6 +48,7 @@ internal sealed class PageHarness : BunitContext
         // Faked for the same reason the other two are: the suite never reaches a
         // provider, and OpenRouterCatalog's own tests cover the real one.
         Services.AddSingleton<IOpenRouterCatalog>(catalog);
+        Services.AddSingleton<IApiKeyChecker>(keyChecker);
         Services.AddSingleton(Options.Create(ScanOptions));
         Services.AddSingleton(Settings);
         // Only Recipe and Scan options were registered before the settings page
@@ -75,6 +78,9 @@ internal sealed class PageHarness : BunitContext
 
     /// <summary>What /settings gets back when it checks a typed model id.</summary>
     public FakeOpenRouterCatalog Catalog { get; }
+
+    /// <summary>What /settings gets back when it asks whether a key is any good.</summary>
+    public FakeApiKeyChecker KeyChecker { get; }
 
     /// <summary>
     /// Mutable up until the page is rendered, so a test can switch recipe
@@ -112,7 +118,8 @@ internal sealed class PageHarness : BunitContext
             await InventoryHarness.CreateAsync(),
             new FakeRecipeGenerator(),
             new FakeReceiptScanner(),
-            new FakeOpenRouterCatalog());
+            new FakeOpenRouterCatalog(),
+            new FakeApiKeyChecker());
 
     /// <summary>
     /// Renders the inventory page as the app hosts it.
@@ -300,5 +307,63 @@ internal sealed class FakeOpenRouterCatalog : IOpenRouterCatalog
         }
 
         return Task.FromResult(id.Length == 0 ? ModelIdCheck.Blank : Answer(id));
+    }
+}
+
+/// <summary>
+/// Stands in for <see cref="ApiKeyChecker"/> without a network. The verdict is
+/// whatever a test sets; <see cref="ApiKeyCheckerTests"/> covers working the real one
+/// out from a provider's answer.
+/// <para>
+/// <b>It records that a key was asked about, never the key.</b> A fake that kept key
+/// material would become the leak the service is shaped to avoid, and would invite a
+/// page test to assert on a secret. Which key went out is a service question, answered
+/// through <see cref="FakeHttp"/> over there.
+/// </para>
+/// </summary>
+internal sealed class FakeApiKeyChecker : IApiKeyChecker
+{
+    private readonly List<(AiProvider Provider, bool Stored, bool HadKey)> _asked = [];
+
+    /// <summary>Returns Valid unless a test says otherwise.</summary>
+    public Func<AiProvider, ApiKeyCheck> Answer { get; set; } = ApiKeyCheck.Valid;
+
+    /// <summary>Set to hold a check open, so a test can see the in-flight state.</summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public IReadOnlyList<(AiProvider Provider, bool Stored, bool HadKey)> Asked
+    {
+        get
+        {
+            lock (_asked)
+            {
+                return _asked.ToArray();
+            }
+        }
+    }
+
+    public async Task<ApiKeyCheck> CheckKeyAsync(
+        AiProvider provider,
+        string? apiKey,
+        CancellationToken ct = default) =>
+        await AnswerAsync(provider, stored: false, !string.IsNullOrWhiteSpace(apiKey), ct);
+
+    public async Task<ApiKeyCheck> CheckStoredAsync(AiProvider provider, CancellationToken ct = default) =>
+        await AnswerAsync(provider, stored: true, hadKey: false, ct);
+
+    private async Task<ApiKeyCheck> AnswerAsync(AiProvider provider, bool stored, bool hadKey, CancellationToken ct)
+    {
+        lock (_asked)
+        {
+            _asked.Add((provider, stored, hadKey));
+        }
+
+        if (Gate is { } gate)
+        {
+            await gate.Task.WaitAsync(ct);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        return Answer(provider);
     }
 }

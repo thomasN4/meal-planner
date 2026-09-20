@@ -77,6 +77,11 @@ builder.Services.AddSingleton<IApiModelClient>(sp =>
 // work before one is stored.
 builder.Services.AddSingleton<IOpenRouterCatalog, OpenRouterCatalog>();
 
+// Asks each provider whether a key is any good, on its cheapest auth-only endpoint.
+// Borrows the three named clients above for the same reason the catalogue does, and
+// reads a stored key inside itself so /settings never holds one.
+builder.Services.AddSingleton<IApiKeyChecker, ApiKeyChecker>();
+
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()

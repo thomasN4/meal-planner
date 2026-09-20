@@ -437,6 +437,203 @@ public class SettingsPageTests
         Assert.False(cut.Find("button.save-settings").HasAttribute("disabled"));
     }
 
+    // ---- the API key check ----
+
+    [Fact]
+    public async Task Adding_a_key_checks_it_once_and_says_it_was_accepted()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("sk-ant-api03-plausible-1111");
+        cut.Find("button.add-key").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("accepted this key", Check(cut), StringComparison.Ordinal));
+
+        var asked = Assert.Single(page.KeyChecker.Asked);
+        Assert.Equal(AiProvider.AnthropicApi, asked.Provider);
+        // The pasted key, not the stored one: nothing has been written yet.
+        Assert.False(asked.Stored);
+        Assert.True(asked.HadKey);
+        Assert.Single(cut.FindAll("span.key-ok"));
+    }
+
+    /// <summary>
+    /// The posture every check on this page takes: it warns, it never blocks. The
+    /// household may know something we do not, and a check that refuses breaks the
+    /// day a provider changes how it answers.
+    /// </summary>
+    [Fact]
+    public async Task A_key_the_provider_refuses_warns_without_blocking_Save()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.KeyChecker.Answer = p => ApiKeyCheck.Rejected(p, 401);
+
+        var cut = page.RenderSettings();
+        cut.Find("input.key-input").Input("sk-or-v1-broken-key-2222");
+        cut.Find("button.add-key").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("refused this key (401)", Check(cut), StringComparison.Ordinal));
+
+        Assert.Single(cut.FindAll("span.key-warn"));
+        Assert.False(cut.Find("button.save-settings").HasAttribute("disabled"));
+    }
+
+    /// <summary>
+    /// The decision that keeps half-typed keys off the wire: a key edited down to a
+    /// broken one would otherwise send every intermediate state out as a failed
+    /// authentication, which is what providers rate-limit.
+    /// </summary>
+    [Fact]
+    public async Task Nothing_is_checked_while_the_key_is_being_typed()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("sk-ant-api03-half-typed");
+
+        Assert.Empty(page.KeyChecker.Asked);
+    }
+
+    /// <summary>
+    /// /settings stays off the network for a visit that changes nothing — the rule
+    /// the model-id check already follows.
+    /// </summary>
+    [Fact]
+    public async Task Visiting_the_page_checks_nothing()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.OutOfCircuitSettings().SetApiKeyAsync(AiProvider.AnthropicApi, "sk-ant-api03-already-1111");
+
+        var cut = page.RenderSettings();
+
+        Assert.Empty(page.KeyChecker.Asked);
+        Assert.Empty(cut.Find("div.key-check").TextContent.Trim());
+    }
+
+    /// <summary>
+    /// The page boundary in one assertion: the chip's Check button asks about a
+    /// stored key without the page ever holding one. <c>CredentialStatus</c> has no
+    /// key field precisely so this cannot be done the other way.
+    /// </summary>
+    [Fact]
+    public async Task A_stored_key_is_checked_on_demand_and_the_page_never_sees_it()
+    {
+        const string secret = "sk-ant-api03-do-not-render-me-9999";
+
+        await using var page = await PageHarness.CreateAsync();
+        await page.OutOfCircuitSettings().SetApiKeyAsync(AiProvider.AnthropicApi, secret);
+
+        var cut = page.RenderSettings();
+        cut.Find("span.key-chip button.key-check-button").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("accepted this key", Check(cut), StringComparison.Ordinal));
+
+        var asked = Assert.Single(page.KeyChecker.Asked);
+        Assert.True(asked.Stored);
+        Assert.DoesNotContain(secret, cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unreachable_provider_says_so_rather_than_calling_the_key_wrong()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.KeyChecker.Answer = p => ApiKeyCheck.Unchecked(p);
+
+        var cut = page.RenderSettings();
+        cut.Find("input.key-input").Input("sk-or-v1-fine-for-all-we-know");
+        cut.Find("button.add-key").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Couldn't reach", Check(cut), StringComparison.Ordinal));
+
+        // Never said as a rejection, and never dressed as a warning about the key.
+        Assert.DoesNotContain("refused", Check(cut), StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("span.key-warn"));
+    }
+
+    [Fact]
+    public async Task A_rate_limited_check_says_the_key_is_not_the_problem()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.KeyChecker.Answer = p => ApiKeyCheck.Unchecked(p, 429);
+
+        var cut = page.RenderSettings();
+        cut.Find("input.key-input").Input("sk-proj-busy-provider-3333");
+        cut.Find("button.add-key").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("429", Check(cut), StringComparison.Ordinal));
+
+        Assert.Contains("says nothing about the key", Check(cut), StringComparison.Ordinal);
+        Assert.DoesNotContain("refused", Check(cut), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A verdict belongs to the key it was about. Undone over a provider that also
+    /// has a stored key, the chip survives — which is the case the render guard
+    /// cannot catch, and the reason <c>ToggleKey</c> clears explicitly.
+    /// </summary>
+    [Fact]
+    public async Task Undoing_a_pasted_key_drops_the_verdict_that_was_about_it()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.OutOfCircuitSettings().SetApiKeyAsync(AiProvider.AnthropicApi, "sk-ant-api03-stored-1111");
+
+        var cut = page.RenderSettings();
+        cut.Find("input.key-input").Input("sk-ant-api03-replacement-2222");
+        cut.Find("button.add-key").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("accepted this key", Check(cut), StringComparison.Ordinal));
+
+        // ✕ on a pending chip drops the pending key; the stored one keeps the chip.
+        cut.Find("span.key-chip button.key-remove").Click();
+
+        Assert.Single(cut.FindAll("span.key-chip"));
+        Assert.Empty(Check(cut).Trim());
+    }
+
+    [Fact]
+    public async Task A_check_in_flight_says_so_and_cannot_be_started_twice()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await page.OutOfCircuitSettings().SetApiKeyAsync(AiProvider.OpenRouter, "sk-or-v1-stored-4444");
+        var gate = new TaskCompletionSource();
+        page.KeyChecker.Gate = gate;
+
+        var cut = page.RenderSettings();
+        cut.Find("span.key-chip button.key-check-button").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Checking the", Check(cut), StringComparison.Ordinal));
+        Assert.True(cut.Find("span.key-chip button.key-check-button").HasAttribute("disabled"));
+
+        gate.SetResult();
+        cut.WaitForAssertion(() =>
+            Assert.Contains("accepted this key", Check(cut), StringComparison.Ordinal));
+        Assert.Single(page.KeyChecker.Asked);
+    }
+
+    [Fact]
+    public async Task The_key_check_line_is_not_a_second_status_region()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        cut.Find("input.key-input").Input("sk-ant-api03-plausible-1111");
+        cut.Find("button.add-key").Click();
+        cut.WaitForAssertion(() =>
+            Assert.Contains("accepted this key", Check(cut), StringComparison.Ordinal));
+
+        Assert.Single(cut.FindAll("div[role=status]"));
+        Assert.Equal("polite", cut.Find("div.key-check").GetAttribute("aria-live"));
+        Assert.Empty(cut.FindAll("div.key-check[role]"));
+    }
+
     // ---- language ----
 
     [Fact]
@@ -860,6 +1057,14 @@ public class SettingsPageTests
 
     private static string InEffect(IRenderedComponent<Settings> cut, AiFeature feature) =>
         Card(cut, feature).QuerySelector("p.in-effect")!.TextContent;
+
+    /// <summary>
+    /// The key-check region's text. Read through cut.Find rather than a captured
+    /// wrapper: the check lands out of band through InvokeAsync(StateHasChanged), and
+    /// an element captured before that render answers from the DOM as it was.
+    /// </summary>
+    private static string Check(IRenderedComponent<Settings> cut) =>
+        cut.Find("div.key-check").TextContent;
 
     private static IElement Select(IRenderedComponent<Settings> cut, AiFeature feature, string cls) =>
         Card(cut, feature).QuerySelector($"select.{cls}")!;

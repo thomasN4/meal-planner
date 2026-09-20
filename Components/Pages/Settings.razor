@@ -9,6 +9,7 @@
 @inject IOptions<RecipeGenerationOptions> RecipeOptions
 @inject IOptions<ReceiptScanningOptions> ScanOptions
 @inject IOpenRouterCatalog Catalog
+@inject IApiKeyChecker KeyChecker
 @inject IJSRuntime JS
 @inject ILogger<Settings> Logger
 
@@ -145,6 +146,26 @@ else
                                 {
                                     <span class="key-flag">@chip.Flag</span>
                                 }
+                                @if (chip.State != "clearing")
+                                {
+                                    @* A word, not a glyph. The chip's glyph slot is
+                                       taken by ✕/↶, and nothing unambiguously means
+                                       "ask the provider whether this credential
+                                       works" — ⟳ reads as reload and ✓ as the verdict
+                                       rather than the request. Disabled while in
+                                       flight, so an impatient second click cannot
+                                       become a second failed authentication. A chip
+                                       armed to clear hides it: offering to verify
+                                       something just struck through is noise. *@
+                                    <button type="button"
+                                            class="key-check-button"
+                                            disabled="@checkingKeys.Contains(chip.Provider)"
+                                            title="Ask @chip.Label whether this key works"
+                                            aria-label="Check the @chip.Label key"
+                                            @onclick="() => CheckKey(chip.Provider)">
+                                        Check
+                                    </button>
+                                }
                                 <button type="button"
                                         class="key-remove"
                                         title="@(chip.State == "clearing" ? "Undo" : "Clear")"
@@ -156,6 +177,48 @@ else
                         }
                     </div>
                 }
+
+                @* One region for all three providers, not a line per chip: a .key-chip
+                   is a baseline inline-flex pill whose geometry is lifted from
+                   .pick-chip, and a sentence inside one destroys the row. aria-live
+                   ="polite" rather than a second role=status (the page has exactly one
+                   and a test asserts Single on it) and never role=alert, which is
+                   assertive.
+
+                   Rendered by walking Chips(), so a verdict cannot outlive the chip it
+                   describes: clear a key and the chip goes, taking its line with it.
+                   The explicit ClearKeyCheck calls cover what that cannot — a chip
+                   that survives while the key underneath it changes. *@
+                <div class="key-check small mt-2" aria-live="polite">
+                    @foreach (var chip in Chips())
+                    {
+                        @if (checkingKeys.Contains(chip.Provider))
+                        {
+                            <div class="text-muted" @key="chip.Provider">
+                                Checking the @chip.Label key&hellip;
+                            </div>
+                        }
+                        else if (keyChecks.GetValueOrDefault(chip.Provider) is { } check)
+                        {
+                            <div @key="chip.Provider">
+                                @if (check.Verdict == ApiKeyVerdict.Valid)
+                                {
+                                    <span class="key-ok">&#10003; @KeySentence(chip, check)</span>
+                                }
+                                else if (check.Verdict == ApiKeyVerdict.Rejected)
+                                {
+                                    <span class="key-warn">&#9888; @KeySentence(chip, check)</span>
+                                }
+                                else if (check.Verdict == ApiKeyVerdict.Unchecked)
+                                {
+                                    @* No glyph. Unchecked is not a warning about the
+                                       key, and a ⚠ beside it would read as one. *@
+                                    <span class="text-muted">@KeySentence(chip, check)</span>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
             </div>
 
             <p class="text-muted small mb-0 mt-3">
@@ -488,6 +551,14 @@ else
     private readonly Dictionary<AiFeature, ElementReference> modelIdBoxes = [];
     private AiFeature? focusModelId;
 
+    // ---- the API key check ----
+
+    // The model-check triple again, keyed on provider rather than feature: the
+    // verdict, the in-flight token source, and the spinner flag.
+    private readonly Dictionary<AiProvider, ApiKeyCheck> keyChecks = [];
+    private readonly Dictionary<AiProvider, CancellationTokenSource> keyCheckCts = [];
+    private readonly HashSet<AiProvider> checkingKeys = [];
+
     // Same length-scaled dwell as Inventory.razor's. A knowingly duplicated ~40
     // lines: extracting it would mean editing that page in a pass meant to be
     // additive. If a third page grows one, extract then.
@@ -715,12 +786,23 @@ else
         // mind; leaving both queued would make Save's order decide the outcome.
         clearing.Remove(provider);
 
+        // One request per key entered, and no debounce: this is a click. Checking as
+        // someone types would send every half-finished key out as a failed
+        // authentication, which is what providers rate-limit.
+        CheckKey(provider);
+
         keyDraft = string.Empty;
         keyProviderOverride = null;
     }
 
     private void ToggleKey(AiProvider provider)
     {
+        // Both branches change which key material this provider's chip stands for, so
+        // the verdict has to go. The render guard cannot catch this one: undo a
+        // pending key over a provider that also has a *stored* key and the chip
+        // survives, wearing a ✓ that was about the key just dropped.
+        ClearKeyCheck(provider);
+
         if (pendingKeys.Remove(provider))
         {
             return;
@@ -896,6 +978,12 @@ else
 
     private void Revert()
     {
+        foreach (var provider in pendingKeys.Keys.Concat(clearing).Distinct().ToList())
+        {
+            // ToggleKey's hazard, at scale.
+            ClearKeyCheck(provider);
+        }
+
         pendingKeys.Clear();
         clearing.Clear();
         keyDraft = string.Empty;
@@ -1079,6 +1167,106 @@ else
             ? " It takes no reasoning effort, so the effort setting will be ignored."
             : null;
 
+    // ---- the API key check ----
+
+    /// <summary>
+    /// Asks the provider about this chip's key, replacing any question already in
+    /// flight for it. One entry point for both paths, so "the key the user just
+    /// pasted, or the one in the database" is decided in a single place: a pending key
+    /// is the page's to hand over, a stored one is read inside the service and never
+    /// comes back here.
+    /// </summary>
+    private void CheckKey(AiProvider provider)
+    {
+        CancelKeyCheck(provider);
+        keyChecks.Remove(provider);
+
+        var cts = new CancellationTokenSource();
+        keyCheckCts[provider] = cts;
+        checkingKeys.Add(provider);
+
+        // The page's third deliberately unawaited call, answering AGENTS.md's two
+        // objections the way RunCheckAsync does: it re-renders through InvokeAsync,
+        // and nothing it can throw goes unlogged.
+        _ = RunKeyCheckAsync(provider, pendingKeys.GetValueOrDefault(provider), cts.Token);
+    }
+
+    private async Task RunKeyCheckAsync(AiProvider provider, string? pending, CancellationToken token)
+    {
+        try
+        {
+            var check = pending is null
+                ? await KeyChecker.CheckStoredAsync(provider, token)
+                : await KeyChecker.CheckKeyAsync(provider, pending, token);
+            token.ThrowIfCancellationRequested();
+
+            keyChecks[provider] = check;
+            checkingKeys.Remove(provider);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer key for this provider, an undo, a Revert, or disposal. If a
+            // successor armed a check it has already re-added this provider to
+            // `checkingKeys`, so don't touch it here.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish.
+            checkingKeys.Remove(provider);
+            Logger.LogWarning(ex, "Could not check the {Provider} API key", provider);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CancelKeyCheck(AiProvider provider)
+    {
+        if (keyCheckCts.Remove(provider, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checkingKeys.Remove(provider);
+    }
+
+    private void ClearKeyCheck(AiProvider provider)
+    {
+        CancelKeyCheck(provider);
+        keyChecks.Remove(provider);
+    }
+
+    /// <summary>
+    /// The whole sentence for a verdict. Composed here rather than in the service,
+    /// which stays free of UI prose — and it is the page that knows whether this chip
+    /// is a key on its way in or one already stored, which changes the tail.
+    /// <para>
+    /// <b>"Accepted", never "works" or "valid".</b> The check authenticates; it does
+    /// not prove the key can pay, or that its scope covers what the features ask for.
+    /// A key with no credit passes here and 402s on the next real call, so the sentence
+    /// must not promise more than was asked.
+    /// </para>
+    /// </summary>
+    private static string KeySentence(Chip chip, ApiKeyCheck check) => check.Verdict switch
+    {
+        ApiKeyVerdict.Valid => $"{chip.Label} accepted this key.",
+
+        ApiKeyVerdict.Rejected => chip.State == "pending"
+            ? $"{chip.Label} refused this key ({check.Status}). Saving it is allowed — every call will fail."
+            : $"{chip.Label} refused this key ({check.Status}). Every call will fail until it is replaced.",
+
+        // Two shapes of "we could not ask", and neither is a claim about the key.
+        ApiKeyVerdict.Unchecked when check.Status == 429 =>
+            $"{chip.Label} rate-limited the check (429). That says nothing about the key — try again in a moment.",
+        ApiKeyVerdict.Unchecked when check.Status is { } status =>
+            $"{chip.Label} answered {status} when we asked. That says nothing about the key.",
+        ApiKeyVerdict.Unchecked => chip.State == "pending"
+            ? $"Couldn't reach {chip.Label} to check this key. It will be saved exactly as typed."
+            : $"Couldn't reach {chip.Label} to check this key.",
+
+        _ => string.Empty,
+    };
+
     // ---- status ----
 
     private void ShowStatus(string message, bool isError = false)
@@ -1120,7 +1308,7 @@ else
     }
 
     /// <summary>
-    /// The status timer and any pending model-id check. There is no notifier
+    /// The status timer and any pending model-id or API key check. There is no notifier
     /// subscription here on purpose (see <see cref="AiSettingsService"/>) — don't
     /// delete this as dead code.
     /// </summary>
@@ -1129,12 +1317,13 @@ else
         statusCts?.Cancel();
         statusCts?.Dispose();
 
-        foreach (var pending in checkCts.Values)
+        foreach (var pending in checkCts.Values.Concat(keyCheckCts.Values))
         {
             pending.Cancel();
             pending.Dispose();
         }
 
         checkCts.Clear();
+        keyCheckCts.Clear();
     }
 }
