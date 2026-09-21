@@ -22,6 +22,19 @@ read_body() {
     fi
 
     if (($# == 1)); then
+        # A lone dash is the one argument that is never a body. It is what a
+        # caller types when they expect the "read stdin" convention this ladder
+        # does not have — and it posts, because a dash is not whitespace and
+        # require_nonblank has no way to know where the text came from. Caught
+        # here rather than there for that reason: this branch is the only one
+        # that knows the text arrived as an argument, so it can name the two
+        # spellings that work. (Paid for: a PR comment that went out as "-".)
+        if [[ "$1" == "-" ]]; then
+            echo "$me: \"-\" is not a $what — this takes the text itself, or stdin" >&2
+            echo "       $me <number> \"$what text\"   or   $me <number> < file" >&2
+            exit 2
+        fi
+
         printf '%s' "$1"
     elif [[ -t 0 ]]; then
         # Reading stdin is right for the documented `< body.md` form, but with a
