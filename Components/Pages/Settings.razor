@@ -1,0 +1,1372 @@
+@page "/settings"
+@rendermode InteractiveServer
+@implements IDisposable
+@using MealPlanner.Models
+@using MealPlanner.Services
+@using Microsoft.Extensions.Options
+@inject AiSettingsService SettingsSvc
+@inject IOptions<CategorizationOptions> ClassifyOptions
+@inject IOptions<RecipeGenerationOptions> RecipeOptions
+@inject IOptions<ReceiptScanningOptions> ScanOptions
+@inject IOpenRouterCatalog Catalog
+@inject IApiKeyChecker KeyChecker
+@inject IJSRuntime JS
+@inject ILogger<Settings> Logger
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Settings</h1>
+<p class="text-muted">Which model each feature asks for, and how this browser looks and reads.</p>
+
+@if (settings is null)
+{
+    <p class="text-muted">Loading&hellip;</p>
+}
+else
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Appearance</h2>
+
+            <div class="d-flex flex-wrap gap-4">
+                <div>
+                    @* Moved here out of MainLayout's top row so the app has one
+                       home for preferences. The component is unchanged. *@
+                    <span class="form-label mb-1 d-block">Colour theme</span>
+                    <ThemeToggle />
+                </div>
+
+                <div>
+                    <span class="form-label mb-1 d-block" id="language-label">Language</span>
+                    <div class="btn-group btn-group-sm" role="group" aria-labelledby="language-label">
+                        @foreach (var (value, label) in LanguageChoices)
+                        {
+                            var chosen = language == value;
+
+                            @* aria-pressed carries a string, never a bool:
+                               Blazor omits a false bool attribute, which would
+                               leave the unpressed buttons with no state at all. *@
+                            <button type="button"
+                                    class="btn btn-outline-secondary lang-choice @(chosen ? "active" : null)"
+                                    aria-pressed="@(chosen ? "true" : "false")"
+                                    @onclick="@(async () => await ChooseLanguageAsync(value))">
+                                @label
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <p class="text-muted small mb-0 mt-3">
+                Both are stored in this browser &mdash; other household members' browsers
+                keep their own, and neither waits for Save. Nothing is translated yet:
+                every screen is English. This remembers the choice for when that changes.
+            </p>
+        </div>
+    </div>
+
+    <div class="card mb-4 @(KeysDirty ? "card-dirty" : null)" id="credentials">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+                <h2 class="h5">API keys</h2>
+                @if (KeysDirty)
+                {
+                    <span class="card-dirty-flag small text-muted">Unsaved</span>
+                }
+            </div>
+
+            <p class="text-muted small mb-3">
+                One key per provider, shared by every feature below. The Claude
+                subscription needs none.
+            </p>
+
+            @* One row, not one per company: the provider is read off the key's own
+               prefix. @bind:event="oninput" costs a round trip per keystroke, the
+               same deliberate trade the Ingredient box makes — on a LAN the latency
+               is invisible, and the inferred-provider line has to keep up with the
+               typing or it is worse than useless. maxlength is one past the longest
+               key stored, not the limit itself: at the limit the browser cut a long
+               paste down to a key that fit, and nothing could tell it had. One over
+               still bounds what crosses the circuit, and lets KeyTooLong say so. *@
+            <span class="form-label mb-1">Add a key</span>
+            <div class="row g-2 align-items-end">
+                <div class="@(NeedsProviderChoice ? "col-md-6" : "col-md-10")">
+                    <input type="password"
+                           class="form-control key-input"
+                           maxlength="@(AiSettingsService.MaxKeyLength + 1)"
+                           placeholder="Paste an API key"
+                           aria-label="API key"
+                           @bind="keyDraft"
+                           @bind:event="oninput" />
+                </div>
+
+                @if (NeedsProviderChoice)
+                {
+                    <div class="col-md-4">
+                        <select class="form-select key-provider-select"
+                                aria-label="Which provider this key belongs to"
+                                @onchange="ChooseKeyProvider">
+                            <option value="">Pick a provider&hellip;</option>
+                            @foreach (var p in AiCatalog.Providers.Where(p => p.NeedsApiKey))
+                            {
+                                <option value="@p.Provider" selected="@(keyProvider == p.Provider)">@p.Label</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                <div class="col-md-2">
+                    <button type="button"
+                            class="btn btn-outline-secondary w-100 add-key"
+                            disabled="@(!CanAddKey)"
+                            @onclick="AddKey">
+                        Add
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-text key-hint">@KeyHint()</div>
+
+            <div class="mt-3">
+                <span class="form-label mb-1 d-block">Stored</span>
+                @if (Chips().Count == 0)
+                {
+                    <div class="text-muted small">No keys yet.</div>
+                }
+                else
+                {
+                    <div class="chips">
+                        @foreach (var chip in Chips())
+                        {
+                            @* Every chip carries a word as well as a shape. The
+                               painted edge and the dashed border are the fast
+                               signal; the word is what survives greyscale, a
+                               red/green deficit and a palette remapper. *@
+                            <span class="key-chip @chip.State" @key="chip.Provider">
+                                <span class="key-name">@chip.Label</span>
+                                <span class="key-tail">@chip.Tail</span>
+                                @if (chip.Flag is not null)
+                                {
+                                    <span class="key-flag">@chip.Flag</span>
+                                }
+                                @if (chip.State != "clearing")
+                                {
+                                    @* A word, not a glyph. The chip's glyph slot is
+                                       taken by ✕/↶, and nothing unambiguously means
+                                       "ask the provider whether this credential
+                                       works" — ⟳ reads as reload and ✓ as the verdict
+                                       rather than the request. Disabled while in
+                                       flight, so an impatient second click cannot
+                                       become a second failed authentication. A chip
+                                       armed to clear hides it: offering to verify
+                                       something just struck through is noise. *@
+                                    <button type="button"
+                                            class="key-check-button"
+                                            disabled="@checkingKeys.Contains(chip.Provider)"
+                                            title="Ask @chip.Label whether this key works"
+                                            aria-label="Check the @chip.Label key"
+                                            @onclick="() => CheckKey(chip.Provider)">
+                                        Check
+                                    </button>
+                                }
+                                <button type="button"
+                                        class="key-remove"
+                                        title="@(chip.State == "clearing" ? "Undo" : "Clear")"
+                                        aria-label="@(chip.State == "clearing" ? $"Undo clearing the {chip.Label} key" : $"Clear the {chip.Label} key")"
+                                        @onclick="() => ToggleKey(chip.Provider)">
+                                    @(chip.State == "clearing" ? "↶" : "✕")
+                                </button>
+                            </span>
+                        }
+                    </div>
+                }
+
+                @* One region for all three providers, not a line per chip: a .key-chip
+                   is a baseline inline-flex pill whose geometry is lifted from
+                   .pick-chip, and a sentence inside one destroys the row. aria-live
+                   ="polite" rather than a second role=status (the page has exactly one
+                   and a test asserts Single on it) and never role=alert, which is
+                   assertive.
+
+                   Rendered by walking Chips(), so a verdict cannot outlive the chip it
+                   describes: clear a key and the chip goes, taking its line with it.
+                   The explicit ClearKeyCheck calls cover what that cannot — a chip
+                   that survives while the key underneath it changes. *@
+                <div class="key-check small mt-2" aria-live="polite">
+                    @foreach (var chip in Chips())
+                    {
+                        @if (checkingKeys.Contains(chip.Provider))
+                        {
+                            <div class="text-muted" @key="chip.Provider">
+                                Checking the @chip.Label key&hellip;
+                            </div>
+                        }
+                        else if (keyChecks.GetValueOrDefault(chip.Provider) is { } check)
+                        {
+                            <div @key="chip.Provider">
+                                @if (check.Verdict == ApiKeyVerdict.Valid)
+                                {
+                                    <span class="key-ok">&#10003; @KeySentence(chip, check)</span>
+                                }
+                                else if (check.Verdict == ApiKeyVerdict.Rejected)
+                                {
+                                    <span class="key-warn">&#9888; @KeySentence(chip, check)</span>
+                                }
+                                else if (check.Verdict == ApiKeyVerdict.Unchecked)
+                                {
+                                    @* No glyph. Unchecked is not a warning about the
+                                       key, and a ⚠ beside it would read as one. *@
+                                    <span class="text-muted">@KeySentence(chip, check)</span>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <p class="text-muted small mb-0 mt-3">
+                This page has no login, like the rest of the app &mdash; anyone on the
+                home network can change or clear these.
+            </p>
+        </div>
+    </div>
+
+    @foreach (var feature in Enum.GetValues<AiFeature>())
+    {
+        var draft = drafts[feature];
+        var info = AiCatalog.For(draft.Provider);
+        var dirty = Dirty(feature);
+
+        <div class="card mb-4 feature-card @(dirty ? "card-dirty" : null)"
+             data-feature="@feature"
+             @key="feature">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                    <h2 class="h5">@Label(feature)</h2>
+                    @if (dirty)
+                    {
+                        <span class="card-dirty-flag small text-muted">Unsaved</span>
+                    }
+                </div>
+
+                @* What this page does not control, read off the live IOptions<T>
+                   rather than hardcoded so it cannot drift from appsettings.json.
+                   A feature with nothing saved runs that file's Model/Effort on
+                   the CLI — the choice shown below — and says so, because
+                   "default" and "chosen" look identical in a dropdown. *@
+                <p class="in-effect text-muted small mb-2">
+                    @if (Stored(feature).IsDefault)
+                    {
+                        @* One clause, because the section is the same one either way:
+                           an always-on second sentence named it twice in a row
+                           ("…the default from Categorization in appsettings.json.
+                           Timeout 90s and the on/off switch come from Categorization in
+                           appsettings.json."), which reads as two facts about two
+                           places. *@
+                        <span class="is-default">Nothing saved yet &mdash; the model below, the
+                            timeout of @RunningTimeout(feature)s and the on/off switch all come
+                            from <code>@SectionName(feature)</code> in appsettings.json.</span>
+                    }
+                    else
+                    {
+                        <text>Timeout @RunningTimeout(feature)s and the on/off switch come from
+                        <code>@SectionName(feature)</code> in appsettings.json.</text>
+                    }
+                </p>
+
+                @if (!EnabledToday(feature))
+                {
+                    <div class="alert alert-secondary py-2">
+                        @Label(feature) is switched off
+                        (<code>@SectionName(feature):Enabled</code> in appsettings.json).
+                    </div>
+                }
+
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label mb-1" for="provider-@feature">Provider</label>
+                        <select class="form-select provider-select"
+                                id="provider-@feature"
+                                @onchange="e => ChooseProvider(feature, e)">
+                            @foreach (var p in AiCatalog.Providers)
+                            {
+                                <option value="@p.Provider" selected="@(draft.Provider == p.Provider)">@p.Label</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-md-5">
+                        <label class="form-label mb-1" for="model-@feature">Model</label>
+                        <select class="form-select model-select"
+                                id="model-@feature"
+                                @onchange="e => ChooseModel(feature, e)">
+                            @foreach (var m in info.Models)
+                            {
+                                <option value="@m.Id" selected="@(!draft.IsOther && draft.Model == m.Id)">@m.Label</option>
+                            }
+                            <option value="@OtherSentinel" selected="@draft.IsOther">Other&hellip;</option>
+                        </select>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label mb-1" for="effort-@feature">Effort</label>
+                        @if (SupportsEffort(draft))
+                        {
+                            <select class="form-select effort-select"
+                                    id="effort-@feature"
+                                    @onchange="e => ChooseEffort(feature, e)">
+                                @if (draft.IsOther)
+                                {
+                                    @* Only for a typed id: a curated model that
+                                       takes effort always takes one. *@
+                                    <option value="" selected="@(draft.Effort is null)">None</option>
+                                }
+                                @foreach (var e in info.Efforts)
+                                {
+                                    <option value="@e" selected="@(draft.Effort == e)">@e</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <span class="text-muted small d-block effort-none" id="effort-@feature">
+                                Not applicable for this model
+                            </span>
+                        }
+                    </div>
+                </div>
+
+                @* Full width below the row, never a fourth column: with
+                   align-items-end a taller column drags the others' baselines,
+                   which is the same reason Inventory.razor puts Notes here. *@
+                @if (draft.IsOther)
+                {
+                    <div class="mt-2">
+                        <label class="form-label mb-1" for="model-other-@feature">Model id</label>
+                        <input class="form-control model-other"
+                               id="model-other-@feature"
+                               maxlength="100"
+                               @ref="modelIdBoxes[feature]"
+                               @bind="draft.Model"
+                               @bind:event="oninput"
+                               @bind:after="@(() => StartCheck(feature, DebounceMilliseconds))" />
+                        <div class="form-text">
+                            @if (draft.Provider == AiProvider.OpenRouter)
+                            {
+                                <text>Typed exactly as OpenRouter spells it &mdash; checked
+                                against OpenRouter's public model list.</text>
+                            }
+                            else
+                            {
+                                @* Still true everywhere else: OpenAI's and Anthropic's
+                                   model lists both need a key, so there is nothing to
+                                   check against before one is stored. *@
+                                <text>Typed exactly as the provider spells it. Nothing checks it.</text>
+                            }
+                        </div>
+
+                        @* Rendered for every provider, because an empty box is not an
+                           OpenRouter question: SaveFeatureAsync refuses a blank model
+                           whoever is being asked. Says what the feature keeps meanwhile,
+                           so "Nothing changed yet" under a dropdown visibly reading
+                           "Other…" is explained rather than merely true. *@
+                        @if (string.IsNullOrWhiteSpace(draft.Model))
+                        {
+                            <div class="form-text model-required">
+                                Type a model id. Nothing on this card is saved until you do
+                                &mdash; @Label(feature).ToLowerInvariant() still runs
+                                <code>@Stored(feature).Model</code>.
+                            </div>
+                        }
+
+                        @* aria-live="polite", not a second role=status (the page has
+                           exactly one and it belongs to save feedback) and not
+                           role=alert, which is assertive and would interrupt a screen
+                           reader on every debounce tick. *@
+                        @if (draft.Provider == AiProvider.OpenRouter)
+                        {
+                            <div class="model-check small mt-1" aria-live="polite">
+                                @if (checking.Contains(feature))
+                                {
+                                    <span class="text-muted">Checking&hellip;</span>
+                                }
+                                else if (checks.GetValueOrDefault(feature) is { } check)
+                                {
+                                    @if (check.Verdict == ModelIdVerdict.Listed && UnusableBecause(feature, check) is { } fault)
+                                    {
+                                        <span class="model-warn">
+                                            &#9888; <b>@check.Name</b> is listed, but @fault
+                                        </span>
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.Listed)
+                                    {
+                                        <span class="model-ok">
+                                            &#10003; OpenRouter lists this as <b>@check.Name</b>.@EffortAside(draft, check)
+                                        </span>
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.NotListed)
+                                    {
+                                        @* Says what saving anyway costs rather than
+                                           refusing, the same posture as the needs-key
+                                           alert: AiCatalog is not a whitelist, and a
+                                           check that blocks breaks the day OpenRouter
+                                           adds a model faster than we read about it. *@
+                                        <span class="model-warn">
+                                            &#9888; OpenRouter doesn't list &ldquo;@check.Id&rdquo;.
+                                            Saving it is allowed &mdash; the call will fail.
+                                        </span>
+                                        @if (check.Suggestions.Count > 0)
+                                        {
+                                            @* The gap before each id is a CSS margin on
+                                               .model-suggestion, not a space in the markup.
+                                               Blazor collapses whitespace around an element
+                                               boundary, and a trailing space inside this span
+                                               survives into the DLL's markup literal and still
+                                               renders as "Did you meananthropic/…" — measured in
+                                               a browser at 10x. bUnit cannot see the margin, so
+                                               the gap is a browser-only claim. *@
+                                            <span class="text-muted">Did you mean</span>
+                                            @for (var i = 0; i < check.Suggestions.Count; i++)
+                                            {
+                                                var suggestion = check.Suggestions[i];
+                                                @* Never btn-primary: Save is the page's
+                                                   only one, and a test counts them. *@
+                                                <button type="button"
+                                                        class="btn btn-link btn-sm p-0 align-baseline model-suggestion"
+                                                        @onclick="@(() => Adopt(feature, suggestion))">@suggestion</button><span class="text-muted">@(i < check.Suggestions.Count - 1 ? "," : "?")</span>
+                                            }
+                                        }
+                                    }
+                                    else if (check.Verdict == ModelIdVerdict.Unchecked)
+                                    {
+                                        @* Not the same thing as "we looked and it is
+                                           not there", and must never be said as if it
+                                           were. *@
+                                        <span class="text-muted">
+                                            Couldn't reach OpenRouter to check this id.
+                                            It will be saved exactly as typed.
+                                        </span>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (MissingKeyFor(draft) is { } missing)
+                {
+                    @* Warns, never blocks: choosing the provider before pasting
+                       the key is a legitimate order of operations. But it says
+                       what saving anyway costs — every call fails, logged, and
+                       the feature comes back empty. role=alert, because the
+                       page's one role=status belongs to save feedback. *@
+                    <div role="alert" class="alert alert-warning py-2 mt-2 mb-0 needs-key">
+                        @missing has no key yet &mdash; @Label(feature).ToLowerInvariant() will fail
+                        until one is added under <a href="#credentials">API keys</a>.
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <button type="button" class="btn btn-primary save-settings"
+                disabled="@(!AnyDirty || saving)" @onclick="SaveAsync">
+            Save settings
+        </button>
+        <button type="button" class="btn btn-outline-secondary revert-settings"
+                disabled="@(!AnyDirty || saving)" @onclick="Revert">
+            Discard changes
+        </button>
+        <span class="text-muted small ms-2 dirty-hint">@DirtyHint()</span>
+    </div>
+
+    @* Exactly one role="status" on the page. Everything else that speaks —
+       needs-key, save failures — is role="alert". *@
+    <div role="status">
+        @if (statusMessage is not null)
+        {
+            <div class="alert @(statusIsError ? "alert-warning" : "alert-success") py-2 mt-3 mb-0">
+                @statusMessage
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private const string OtherSentinel = "__other";
+    private const string LanguageFallback = "system";
+
+    private static readonly (string Value, string Label)[] LanguageChoices =
+    [
+        (LanguageFallback, "System"),
+        ("en", "English"),
+        ("fr", "Français"),
+    ];
+
+    /// <summary>
+    /// One feature's unsaved edit. A class rather than a record so the model-id
+    /// box can <c>@bind</c> straight at it; the drafts live in <c>@code</c> and
+    /// never in the DOM, the row editor's rule.
+    /// </summary>
+    private sealed class Draft
+    {
+        public AiProvider Provider { get; set; }
+        public string Model { get; set; } = string.Empty;
+        public bool IsOther { get; set; }
+        public AiEffort? Effort { get; set; }
+    }
+
+    private sealed record Chip(AiProvider Provider, string Label, string Tail, string? Flag, string State);
+
+    private AiSettings? settings;
+    private readonly Dictionary<AiFeature, Draft> drafts = [];
+
+    // Key state. The typed key is a draft like everything else — Add moves it
+    // into `pendingKeys`, and only Save writes. Never in the DOM: that keeps the
+    // secret out of a re-render's diff as well as out of the markup.
+    private string keyDraft = string.Empty;
+    private AiProvider? keyProviderOverride;
+    private readonly Dictionary<AiProvider, string> pendingKeys = [];
+    private readonly HashSet<AiProvider> clearing = [];
+
+    private string language = LanguageFallback;
+    private bool saving;
+
+    private string? statusMessage;
+    private bool statusIsError;
+    private CancellationTokenSource? statusCts;
+
+    // ---- the OpenRouter model-id check ----
+
+    /// <summary>
+    /// Long enough that a check is one round trip per word rather than per letter,
+    /// short enough that the answer lands before the eye leaves the box.
+    /// </summary>
+    private const int DebounceMilliseconds = 400;
+
+    private readonly Dictionary<AiFeature, ModelIdCheck> checks = [];
+    private readonly Dictionary<AiFeature, CancellationTokenSource> checkCts = [];
+    private readonly HashSet<AiFeature> checking = [];
+
+    // Three fixed keys, so unlike the row editor's `pencils` there is nothing to
+    // prune: a feature's entry is simply overwritten on the next render.
+    private readonly Dictionary<AiFeature, ElementReference> modelIdBoxes = [];
+    private AiFeature? focusModelId;
+
+    // ---- the API key check ----
+
+    // The model-check triple again, keyed on provider rather than feature: the
+    // verdict, the in-flight token source, and the spinner flag.
+    private readonly Dictionary<AiProvider, ApiKeyCheck> keyChecks = [];
+    private readonly Dictionary<AiProvider, CancellationTokenSource> keyCheckCts = [];
+    private readonly HashSet<AiProvider> checkingKeys = [];
+
+    // Same length-scaled dwell as Inventory.razor's. A knowingly duplicated ~40
+    // lines: extracting it would mean editing that page in a pass meant to be
+    // additive. If a third page grows one, extract then.
+    private static TimeSpan StatusDurationFor(string message) =>
+        TimeSpan.FromSeconds(Math.Clamp(2 + message.Length / 15.0, 4.0, 12.0));
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (focusModelId is { } adopted && modelIdBoxes.TryGetValue(adopted, out var box))
+        {
+            focusModelId = null;
+            await box.FocusAsync();
+        }
+
+        if (!firstRender)
+        {
+            return;
+        }
+
+        // The server cannot see localStorage, so the marker starts on System and
+        // corrects itself once the circuit can ask. Exactly what ThemeToggle does.
+        var stored = await JS.InvokeAsync<string>("mealPlannerLang.get");
+        var known = NormalizeLanguage(stored);
+        if (known != language)
+        {
+            language = known;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        await RefreshStoredAsync();
+        drafts.Clear();
+        foreach (var choice in settings!.Features)
+        {
+            drafts[choice.Feature] = ToDraft(choice);
+        }
+    }
+
+    // The stored half of LoadAsync alone. A save that stops partway needs exactly
+    // this and not the rest: rebuilding the drafts would throw away the edits it
+    // never reached.
+    private async Task RefreshStoredAsync() => settings = await SettingsSvc.GetAsync();
+
+    private static Draft ToDraft(FeatureChoice choice) => new()
+    {
+        Provider = choice.Provider,
+        Model = choice.Model,
+        // Derived, never stored: a curated id later dropped from the catalog
+        // simply reappears as "Other…" with the id already in the box, and the
+        // two can never disagree.
+        IsOther = !AiCatalog.KnowsModel(choice.Provider, choice.Model),
+        Effort = choice.Effort,
+    };
+
+    // ---- feature editing ----
+
+    private void ChooseProvider(AiFeature feature, ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<AiProvider>(e.Value?.ToString(), out var provider))
+        {
+            return;
+        }
+
+        var draft = drafts[feature];
+        draft.Provider = provider;
+
+        var info = AiCatalog.For(provider);
+        if (!draft.IsOther && !AiCatalog.KnowsModel(provider, draft.Model))
+        {
+            // The old model belongs to the old provider. Land on that provider's
+            // first offering rather than leaving a combination it cannot serve.
+            draft.Model = info.Models[0].Id;
+        }
+
+        draft.Effort = SettleEffort(draft);
+
+        // ChooseProvider deliberately keeps an IsOther draft's typed id across a
+        // switch, so without this an OpenRouter verdict would sit under an OpenAI
+        // card claiming something OpenRouter never said. Re-checks immediately when
+        // the switch lands *on* OpenRouter with an id already in the box.
+        ClearCheck(feature);
+        StartCheck(feature, delay: 0);
+    }
+
+    private void ChooseModel(AiFeature feature, ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        var draft = drafts[feature];
+
+        if (value == OtherSentinel)
+        {
+            draft.IsOther = true;
+            draft.Model = string.Empty;
+        }
+        else
+        {
+            draft.IsOther = false;
+            draft.Model = value;
+        }
+
+        draft.Effort = SettleEffort(draft);
+
+        // Picking Other… blanks the box, and picking a curated model leaves the
+        // check with nothing to describe. Either way the old verdict is stale.
+        ClearCheck(feature);
+    }
+
+    private void ChooseEffort(AiFeature feature, ChangeEventArgs e) =>
+        drafts[feature].Effort = Enum.TryParse<AiEffort>(e.Value?.ToString(), out var effort)
+            ? effort
+            : null;
+
+    /// <summary>
+    /// Keeps an effort the pair can actually use. The service enforces this too —
+    /// this is the copy that stops the page ever <em>showing</em> a stale value.
+    /// </summary>
+    private static AiEffort? SettleEffort(Draft draft)
+    {
+        if (!SupportsEffort(draft))
+        {
+            return null;
+        }
+
+        var offered = AiCatalog.For(draft.Provider).Efforts;
+        if (draft.Effort is { } current && offered.Contains(current))
+        {
+            return current;
+        }
+
+        return draft.IsOther ? null : offered.FirstOrDefault();
+    }
+
+    private static bool SupportsEffort(Draft draft) =>
+        // A blank "Other…" box has no model to ask about; fall back to the
+        // provider's own answer so the control does not flicker away mid-typing.
+        draft.IsOther && string.IsNullOrWhiteSpace(draft.Model)
+            ? AiCatalog.For(draft.Provider).Efforts.Count > 0
+            : AiCatalog.SupportsEffort(draft.Provider, draft.Model);
+
+    private string? MissingKeyFor(Draft draft)
+    {
+        var info = AiCatalog.For(draft.Provider);
+        if (!info.NeedsApiKey)
+        {
+            return null;
+        }
+
+        return HasKeyAfterSave(draft.Provider) ? null : info.Label;
+    }
+
+    private bool HasKeyAfterSave(AiProvider provider)
+    {
+        if (pendingKeys.ContainsKey(provider))
+        {
+            return true;
+        }
+
+        if (clearing.Contains(provider))
+        {
+            return false;
+        }
+
+        return settings!.Credentials.Any(c => c.Provider == provider && c.HasKey);
+    }
+
+    // ---- keys ----
+
+    // The prefix decides whenever it can, and a hand-picked provider answers
+    // only the case where it cannot — the same predicate NeedsProviderChoice
+    // shows the dropdown on. Taking the override first let a pick made for one
+    // key outlive it: pasting a plainly-Anthropic key over the one that needed
+    // asking queued it under OpenRouter, with the dropdown gone from the page by
+    // then and the hint the only thing that could have said so. Measured in a
+    // browser on 2026-09-20; bUnit would have shown it too, nobody had asked.
+    private AiProvider? keyProvider =>
+        AiCatalog.InferProvider(keyDraft) ?? keyProviderOverride;
+
+    private bool NeedsProviderChoice =>
+        !string.IsNullOrWhiteSpace(keyDraft) && AiCatalog.InferProvider(keyDraft) is null;
+
+    // Refused rather than cut: a truncated key can never work, and the check
+    // would then report a correctly pasted key as refused by its provider.
+    private bool KeyTooLong => keyDraft.Trim().Length > AiSettingsService.MaxKeyLength;
+
+    private bool CanAddKey => !string.IsNullOrWhiteSpace(keyDraft) && !KeyTooLong && keyProvider is not null;
+
+    private void ChooseKeyProvider(ChangeEventArgs e) =>
+        keyProviderOverride = Enum.TryParse<AiProvider>(e.Value?.ToString(), out var provider)
+            ? provider
+            : null;
+
+    private string KeyHint()
+    {
+        if (string.IsNullOrWhiteSpace(keyDraft))
+        {
+            return "The provider is read off the key itself — nothing to choose.";
+        }
+
+        if (KeyTooLong)
+        {
+            return $"That's longer than any API key we know of (over {AiSettingsService.MaxKeyLength} " +
+                   "characters) — check what was pasted.";
+        }
+
+        if (keyProvider is not { } provider)
+        {
+            return "Not a prefix we recognise — say which provider this belongs to.";
+        }
+
+        var label = AiCatalog.For(provider).Label;
+
+        // "Recognised" is a claim about the prefix, and it is only ours to make
+        // when the prefix is what answered. A provider chosen from the dropdown
+        // was told to us — one line under the control that appeared precisely
+        // because the app could not work it out. The predicate is inference, not
+        // the override: keyed on the override, a stale pick would put the wrong
+        // word on a key the prefix had just answered for.
+        var how = AiCatalog.InferProvider(keyDraft) is null
+            ? $"Filed under {label}, as you picked"
+            : $"Recognised as {label}";
+
+        return HasKeyAfterSave(provider)
+            ? $"{how} — replaces the key already stored."
+            : $"{how} — this will be a new key.";
+    }
+
+    private void AddKey()
+    {
+        if (keyProvider is not { } provider || string.IsNullOrWhiteSpace(keyDraft))
+        {
+            return;
+        }
+
+        pendingKeys[provider] = keyDraft.Trim();
+        // Adding a key for a provider armed to clear is an unambiguous change of
+        // mind; leaving both queued would make Save's order decide the outcome.
+        clearing.Remove(provider);
+
+        // One request per key entered, and no debounce: this is a click. Checking as
+        // someone types would send every half-finished key out as a failed
+        // authentication, which is what providers rate-limit.
+        CheckKey(provider);
+
+        keyDraft = string.Empty;
+        keyProviderOverride = null;
+    }
+
+    private void ToggleKey(AiProvider provider)
+    {
+        // Both branches change which key material this provider's chip stands for, so
+        // the verdict has to go. The render guard cannot catch this one: undo a
+        // pending key over a provider that also has a *stored* key and the chip
+        // survives, wearing a ✓ that was about the key just dropped.
+        ClearKeyCheck(provider);
+
+        if (pendingKeys.Remove(provider))
+        {
+            return;
+        }
+
+        if (!clearing.Remove(provider))
+        {
+            clearing.Add(provider);
+        }
+    }
+
+    private List<Chip> Chips()
+    {
+        var chips = new List<Chip>();
+
+        foreach (var info in AiCatalog.Providers.Where(p => p.NeedsApiKey))
+        {
+            var stored = settings!.Credentials.FirstOrDefault(c => c.Provider == info.Provider);
+            var hasStored = stored?.HasKey == true;
+            var pending = pendingKeys.TryGetValue(info.Provider, out var typed) ? typed : null;
+
+            if (!hasStored && pending is null)
+            {
+                continue;
+            }
+
+            if (pending is not null)
+            {
+                var tail = Tail(pending);
+                chips.Add(hasStored
+                    // Both tails, because this chip is the only warning before an
+                    // overwrite — the argument the receipt review makes for
+                    // showing the stocked quantity beside the proposed one.
+                    ? new Chip(info.Provider, info.Label, $"{Show(stored!.Tail)} → {Show(tail, pending: true)}", "replacing", "pending")
+                    : new Chip(info.Provider, info.Label, Show(tail, pending: true), "new", "pending"));
+                continue;
+            }
+
+            chips.Add(clearing.Contains(info.Provider)
+                ? new Chip(info.Provider, info.Label, Show(stored!.Tail), "clearing", "clearing")
+                : new Chip(info.Provider, info.Label, Show(stored!.Tail), null, string.Empty));
+        }
+
+        return chips;
+    }
+
+    // Mirrors the service's rule: four characters of a very short key is most of
+    // the key, so it shows nothing rather than most of it.
+    private static string? Tail(string key) => key.Length >= 12 ? key[^4..] : null;
+
+    // The stand-in for a key too short to have a tail, and the two words differ
+    // on purpose: "stored" is a fact about a key the database already holds, so
+    // a chip for a key nobody has saved yet read "Anthropic API stored new".
+    private static string Show(string? tail, bool pending = false) =>
+        tail is null ? (pending ? "typed" : "stored") : $"…{tail}";
+
+    // ---- dirty tracking ----
+
+    private FeatureChoice Stored(AiFeature feature) =>
+        settings!.Features.First(f => f.Feature == feature);
+
+    private bool Dirty(AiFeature feature)
+    {
+        var draft = drafts[feature];
+
+        // An "Other…" box nobody has typed in is an unfinished card, not a
+        // changed one. Picking Other… blanks the model, and a blank model is the
+        // one thing SaveFeatureAsync refuses outright — so counting it as a change
+        // armed Save to throw, and the catch-all reported "Could not save. Nothing
+        // was written." without naming the card or the reason. This is the single
+        // place that decides: it drives the Unsaved flag, the painted card edge,
+        // the pending count, whether Save is enabled at all, and which features
+        // the write loop visits. The card says what it is waiting for, so sitting
+        // it out is visible rather than silent.
+        if (draft.IsOther && string.IsNullOrWhiteSpace(draft.Model))
+        {
+            return false;
+        }
+
+        var stored = Stored(feature);
+        return draft.Provider != stored.Provider
+            || !string.Equals(draft.Model.Trim(), stored.Model, StringComparison.Ordinal)
+            || draft.Effort != stored.Effort;
+    }
+
+    private bool KeysDirty => pendingKeys.Count > 0 || clearing.Count > 0;
+
+    private bool AnyDirty => KeysDirty || Enum.GetValues<AiFeature>().Any(Dirty);
+
+    private int PendingCount =>
+        pendingKeys.Count + clearing.Count + Enum.GetValues<AiFeature>().Count(Dirty);
+
+    private string DirtyHint()
+    {
+        if (!AnyDirty)
+        {
+            return "Nothing changed yet.";
+        }
+
+        // "Theme and language aside" is load-bearing, not padding: both write
+        // straight through on click, so a bare "nothing is written until you
+        // save" is a page-wide claim two controls on this page exempt themselves
+        // from.
+        var count = PendingCount;
+        return $"{count} pending {(count == 1 ? "change" : "changes")}. " +
+               "Theme and language aside, nothing here is written until you save.";
+    }
+
+    // ---- saving ----
+
+    private async Task SaveAsync()
+    {
+        if (!AnyDirty || saving)
+        {
+            return;
+        }
+
+        saving = true;
+        var written = 0;
+        // Counted before anything is written: once a write lands, what "pending"
+        // means depends on whether the stored values have been reread yet.
+        var total = PendingCount;
+        var savedFeatures = new List<AiFeature>();
+
+        try
+        {
+            foreach (var feature in Enum.GetValues<AiFeature>().Where(Dirty))
+            {
+                var draft = drafts[feature];
+                await SettingsSvc.SaveFeatureAsync(feature, draft.Provider, draft.Model, draft.Effort);
+                savedFeatures.Add(feature);
+                written++;
+            }
+
+            // ToList first: the write loop mutates the collections it reads, and
+            // the partial-failure path below needs the survivors intact.
+            foreach (var (provider, key) in pendingKeys.ToList())
+            {
+                await SettingsSvc.SetApiKeyAsync(provider, key);
+                pendingKeys.Remove(provider);
+                written++;
+            }
+
+            foreach (var provider in clearing.ToList())
+            {
+                await SettingsSvc.ClearApiKeyAsync(provider);
+                clearing.Remove(provider);
+                written++;
+            }
+
+            await LoadAsync();
+            // "Next call" and not "now": each feature reads its settings as a
+            // call starts, so one already running finishes on the old model.
+            ShowStatus($"Saved {written} {(written == 1 ? "change" : "changes")}. " +
+                       "Each feature uses the new settings from its next call.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not save settings");
+
+            // "The rest are still pending" has to be true, or the retry this
+            // invites writes everything twice — the rule the receipt review follows
+            // when it prunes the rows it already wrote. So the stored values are
+            // reread and only the cards that were written are rebuilt from them;
+            // every other draft keeps its edit. This used to call LoadAsync, which
+            // rebuilds every draft: the cards the loop never reached snapped back
+            // to their stored values with no Unsaved flag, under a message saying
+            // they were still pending. Keys were never affected — the loop removes
+            // each one from pendingKeys as it lands, and LoadAsync leaves that alone.
+            try
+            {
+                await RefreshStoredAsync();
+                foreach (var feature in savedFeatures)
+                {
+                    drafts[feature] = ToDraft(Stored(feature));
+                }
+            }
+            catch (Exception reread)
+            {
+                // Leave every draft as it is. The written cards stay dirty against
+                // the stale copy and a retry rewrites them, which is harmless.
+                // Rebuilding them from that copy would show the old values while
+                // the database holds the new ones.
+                Logger.LogWarning(reread, "Could not reread settings after a failed save");
+            }
+
+            ShowStatus(
+                written == 0
+                    ? "Could not save. Nothing was written."
+                    : $"Saved {written} of {total}, then stopped. The rest are still pending.",
+                isError: true);
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Revert()
+    {
+        foreach (var provider in pendingKeys.Keys.Concat(clearing).Distinct().ToList())
+        {
+            // ToggleKey's hazard, at scale.
+            ClearKeyCheck(provider);
+        }
+
+        pendingKeys.Clear();
+        clearing.Clear();
+        keyDraft = string.Empty;
+        keyProviderOverride = null;
+
+        foreach (var choice in settings!.Features)
+        {
+            drafts[choice.Feature] = ToDraft(choice);
+        }
+    }
+
+    // ---- language ----
+
+    private async Task ChooseLanguageAsync(string value)
+    {
+        language = NormalizeLanguage(value);
+        await JS.InvokeVoidAsync("mealPlannerLang.set", language);
+    }
+
+    // Guarded here as well as in lang.js, not instead of it: localStorage is
+    // user-writable and either end can be reached first.
+    private static string NormalizeLanguage(string? value) =>
+        Array.Exists(LanguageChoices, c => c.Value == value) ? value! : LanguageFallback;
+
+    // ---- what appsettings.json still owns ----
+
+    private static string Label(AiFeature feature) => feature switch
+    {
+        AiFeature.Categorization => "Ingredient classification",
+        AiFeature.RecipeGeneration => "Recipe generation",
+        AiFeature.ReceiptScanning => "Receipt scanning",
+        _ => feature.ToString(),
+    };
+
+    private static string SectionName(AiFeature feature) => feature switch
+    {
+        AiFeature.Categorization => CategorizationOptions.SectionName,
+        AiFeature.RecipeGeneration => RecipeGenerationOptions.SectionName,
+        AiFeature.ReceiptScanning => ReceiptScanningOptions.SectionName,
+        _ => feature.ToString(),
+    };
+
+    private int RunningTimeout(AiFeature feature) => feature switch
+    {
+        AiFeature.Categorization => ClassifyOptions.Value.TimeoutSeconds,
+        AiFeature.RecipeGeneration => RecipeOptions.Value.TimeoutSeconds,
+        _ => ScanOptions.Value.TimeoutSeconds,
+    };
+
+    private bool EnabledToday(AiFeature feature) => feature switch
+    {
+        AiFeature.Categorization => ClassifyOptions.Value.Enabled,
+        AiFeature.RecipeGeneration => RecipeOptions.Value.Enabled,
+        _ => ScanOptions.Value.Enabled,
+    };
+
+    // ---- the OpenRouter model-id check ----
+
+    /// <summary>
+    /// Arms a check, replacing any one already pending for this feature. Synchronous
+    /// and complete on return: the waiting happens in <see cref="RunCheckAsync"/>,
+    /// which has to outlive the keystroke that armed it — exactly the shape
+    /// <c>ShowStatus</c> and its timer take.
+    /// </summary>
+    private void StartCheck(AiFeature feature, int delay)
+    {
+        CancelCheck(feature);
+
+        // Only an OpenRouter "Other…" box has anything to check against. Every other
+        // provider's model list needs a key, which is why this feature is OpenRouter's
+        // alone (see OpenRouterCatalog).
+        var draft = drafts[feature];
+        if (draft.Provider != AiProvider.OpenRouter || !draft.IsOther)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(draft.Model))
+        {
+            checks.Remove(feature);
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        checkCts[feature] = cts;
+        checking.Add(feature);
+
+        // The page's second deliberately unawaited call. Both of AGENTS.md's
+        // objections to fire-and-forget are answered in the method below.
+        _ = RunCheckAsync(feature, draft.Model, delay, cts.Token);
+    }
+
+    private async Task RunCheckAsync(AiFeature feature, string modelId, int delay, CancellationToken token)
+    {
+        try
+        {
+            if (delay > 0)
+            {
+                await Task.Delay(delay, token);
+            }
+
+            var check = await Catalog.CheckAsync(modelId, token);
+            token.ThrowIfCancellationRequested();
+
+            checks[feature] = check;
+            checking.Remove(feature);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer keystroke, a provider change, or disposal. The successor has
+            // already re-added this feature to `checking`, so don't touch it here.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish.
+            checking.Remove(feature);
+            Logger.LogWarning(ex, "Could not check the OpenRouter model id for {Feature}", feature);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CancelCheck(AiFeature feature)
+    {
+        if (checkCts.Remove(feature, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checking.Remove(feature);
+    }
+
+    private void ClearCheck(AiFeature feature)
+    {
+        CancelCheck(feature);
+        checks.Remove(feature);
+    }
+
+    private void Adopt(AiFeature feature, string modelId)
+    {
+        drafts[feature].Model = modelId;
+
+        // A deliberate pick rather than typing, so no debounce.
+        StartCheck(feature, delay: 0);
+
+        // The button that held focus has just removed itself from the page, so focus
+        // would otherwise fall to <body>. Same reasoning as the receipt review's adopt.
+        focusModelId = feature;
+    }
+
+    /// <summary>
+    /// Why a listed model still will not do, or null when it will. Composed one clause
+    /// per missing capability rather than picked from a ladder — the shape
+    /// <c>InventoryChange.Describe()</c> was forced into twice.
+    /// </summary>
+    private static string? UnusableBecause(AiFeature feature, ModelIdCheck check)
+    {
+        var faults = new List<string>();
+
+        if (!check.SupportsStructuredOutput)
+        {
+            faults.Add($"OpenRouter doesn't advertise structured output for it. " +
+                       $"{Label(feature)} sends a JSON schema, so answers are likely to come back as prose.");
+        }
+
+        if (feature == AiFeature.ReceiptScanning && !check.AcceptsImages)
+        {
+            faults.Add("it doesn't accept images. Receipt scanning sends a photo or a PDF.");
+        }
+
+        return faults.Count == 0 ? null : string.Join(" Also, ", faults);
+    }
+
+    /// <summary>
+    /// An effort the model has no knob for is a setting that silently does nothing —
+    /// worth a clause, not a warning, since the answer still arrives.
+    /// </summary>
+    private static string? EffortAside(Draft draft, ModelIdCheck check) =>
+        draft.Effort is not null && !check.SupportsEffort
+            ? " It takes no reasoning effort, so the effort setting will be ignored."
+            : null;
+
+    // ---- the API key check ----
+
+    /// <summary>
+    /// Asks the provider about this chip's key, replacing any question already in
+    /// flight for it. One entry point for both paths, so "the key the user just
+    /// pasted, or the one in the database" is decided in a single place: a pending key
+    /// is the page's to hand over, a stored one is read inside the service and never
+    /// comes back here.
+    /// </summary>
+    private void CheckKey(AiProvider provider)
+    {
+        CancelKeyCheck(provider);
+        keyChecks.Remove(provider);
+
+        var cts = new CancellationTokenSource();
+        keyCheckCts[provider] = cts;
+        checkingKeys.Add(provider);
+
+        // The page's third deliberately unawaited call, answering AGENTS.md's two
+        // objections the way RunCheckAsync does: it re-renders through InvokeAsync,
+        // and nothing it can throw goes unlogged.
+        _ = RunKeyCheckAsync(provider, pendingKeys.GetValueOrDefault(provider), cts.Token);
+    }
+
+    private async Task RunKeyCheckAsync(AiProvider provider, string? pending, CancellationToken token)
+    {
+        try
+        {
+            var check = pending is null
+                ? await KeyChecker.CheckStoredAsync(provider, token)
+                : await KeyChecker.CheckKeyAsync(provider, pending, token);
+            token.ThrowIfCancellationRequested();
+
+            keyChecks[provider] = check;
+            checkingKeys.Remove(provider);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer key for this provider, an undo, a Revert, or disposal. If a
+            // successor armed a check it has already re-added this provider to
+            // `checkingKeys`, so don't touch it here.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish.
+            checkingKeys.Remove(provider);
+            Logger.LogWarning(ex, "Could not check the {Provider} API key", provider);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CancelKeyCheck(AiProvider provider)
+    {
+        if (keyCheckCts.Remove(provider, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checkingKeys.Remove(provider);
+    }
+
+    private void ClearKeyCheck(AiProvider provider)
+    {
+        CancelKeyCheck(provider);
+        keyChecks.Remove(provider);
+    }
+
+    /// <summary>
+    /// The whole sentence for a verdict. Composed here rather than in the service,
+    /// which stays free of UI prose — and it is the page that knows whether this chip
+    /// is a key on its way in or one already stored, which changes the tail.
+    /// <para>
+    /// <b>"Accepted", never "works" or "valid".</b> The check authenticates; it does
+    /// not prove the key can pay, or that its scope covers what the features ask for.
+    /// A key with no credit passes here and 402s on the next real call, so the sentence
+    /// must not promise more than was asked.
+    /// </para>
+    /// </summary>
+    private static string KeySentence(Chip chip, ApiKeyCheck check) => check.Verdict switch
+    {
+        ApiKeyVerdict.Valid => $"{chip.Label} accepted this key.",
+
+        ApiKeyVerdict.Rejected => chip.State == "pending"
+            ? $"{chip.Label} refused this key ({check.Status}). Saving it is allowed — every call will fail."
+            : $"{chip.Label} refused this key ({check.Status}). Every call will fail until it is replaced.",
+
+        // Two shapes of "we could not ask", and neither is a claim about the key.
+        ApiKeyVerdict.Unchecked when check.Status == 429 =>
+            $"{chip.Label} rate-limited the check (429). That says nothing about the key — try again in a moment.",
+        ApiKeyVerdict.Unchecked when check.Status is { } status =>
+            $"{chip.Label} answered {status} when we asked. That says nothing about the key.",
+        ApiKeyVerdict.Unchecked => chip.State == "pending"
+            ? $"Couldn't reach {chip.Label} to check this key. It will be saved exactly as typed."
+            : $"Couldn't reach {chip.Label} to check this key.",
+
+        _ => string.Empty,
+    };
+
+    // ---- status ----
+
+    private void ShowStatus(string message, bool isError = false)
+    {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
+        statusCts = new CancellationTokenSource();
+
+        statusMessage = message;
+        statusIsError = isError;
+        // Paint it now: a handler re-renders at its first incomplete await and
+        // again on completion, so a message set and cleared between those two
+        // points never reaches the browser.
+        StateHasChanged();
+
+        // The one deliberately unawaited call on this page — the timer has to
+        // outlive the handler. Both of AGENTS.md's objections to
+        // fire-and-forget are answered in the method below.
+        _ = DismissStatusAsync(StatusDurationFor(message), statusCts.Token);
+    }
+
+    private async Task DismissStatusAsync(TimeSpan duration, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(duration, token);
+            statusMessage = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // The next save, or disposal — expected.
+        }
+        catch (Exception ex)
+        {
+            // Nothing awaits this task, so an exception here would vanish.
+            Logger.LogWarning(ex, "Could not clear the settings status message");
+        }
+    }
+
+    /// <summary>
+    /// The status timer and any pending model-id or API key check. There is no notifier
+    /// subscription here on purpose (see <see cref="AiSettingsService"/>) — don't
+    /// delete this as dead code.
+    /// </summary>
+    public void Dispose()
+    {
+        statusCts?.Cancel();
+        statusCts?.Dispose();
+
+        foreach (var pending in checkCts.Values.Concat(keyCheckCts.Values))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
+        checkCts.Clear();
+        keyCheckCts.Clear();
+    }
+}

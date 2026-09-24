@@ -15,8 +15,12 @@ html, body {
   box-shadow: 0 0 0 0.1rem var(--bs-body-bg), 0 0 0 0.25rem var(--bs-link-color);
 }
 
+/* Bottom padding belongs to the layout, not to whichever element a page happens
+   to end on: Settings ends on a bare button row with no margin, which sat flush
+   against the bottom of the viewport. */
 .content {
     padding-top: 1.1rem;
+    padding-bottom: 2rem;
 }
 
 h1:focus {

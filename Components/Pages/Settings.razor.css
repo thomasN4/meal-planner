@@ -1,0 +1,191 @@
+/* Bootstrap's .active on an outline button is a fill swap — the current choice
+   signalled by colour and nothing else. Copied from ThemeToggle.razor.css rather
+   than shared: the two live in different CSS-isolation scopes and there is no
+   stylesheet both see. Keep the three in step (ThemeToggle, .role-choice in
+   Recipes.razor.css, and this one).
+
+   --bs-btn-active-color, not --bs-link-color: .active has painted a #6c757d fill
+   over this button, where the link colour measures 1.04:1 and disappears. The
+   label's own colour is legible on that fill by construction, at 4.69:1 in both
+   themes. */
+.lang-choice.active {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color);
+    font-weight: 600;
+}
+
+/* box-shadow is one property, so the rule above *replaces* app.css's `.btn:focus`
+   ring instead of adding to it, and outranks it — leaving the selected language
+   as the one button in the group with no keyboard focus indicator while its
+   siblings ring normally. Both shadows have to be spelled out together. */
+.lang-choice.active:focus {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-btn-active-color),
+                0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
+/* The bar belongs to whichever button is current, so the group must not clip it
+   away at the seams. */
+.lang-choice {
+    border-left-width: 1px;
+}
+
+/* Geometry lifted from .pick-chip in Recipes.razor.css so the two read as one
+   vocabulary. */
+.key-chip {
+    display: inline-flex;
+    /* Wraps, unlike the .pick-chip it borrows from, because a replacing chip is
+       the longest chip in the app. A single-line flex box is never narrower
+       than the sum of its parts, so with an unbreakable .key-tail three
+       replacing chips pushed the page sideways (3px at 360px, 43px at 320px).
+       Wrapping, "replacing Check ✕" drops to a second line inside the pill and
+       the tail stays whole. */
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.125rem 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 1rem;
+    background-color: var(--bs-secondary-bg);
+    font-size: 0.875rem;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* --bs-link-color here, where .lang-choice.active above must use
+   --bs-btn-active-color, and the divergence is the point rather than an
+   inconsistency to tidy away: a chip's ground is --bs-secondary-bg (3.80:1 light,
+   4.76:1 dark) and a card's is --bs-body-bg, while .active has a grey fill
+   painted over it. .pick-chip.use-up already makes exactly this split against
+   .role-choice.active in the same file, for the same reason. */
+.key-chip.pending {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+}
+
+/* .exclude's treatment, chosen there because a dashed edge and a strikethrough
+   survive greyscale, a red/green deficit and a palette remapper — which matters
+   here because this household browses with Dark Reader. The word in .key-flag is
+   the third signal; state is never carried by colour alone. */
+.key-chip.clearing {
+    border-style: dashed;
+}
+
+.key-chip.clearing .key-name,
+.key-chip.clearing .key-tail {
+    text-decoration: line-through;
+}
+
+.key-tail {
+    font-family: var(--bs-font-monospace);
+    font-size: 0.8125rem;
+    /* A replacing chip carries both tails in this one span, and at phone width
+       it wrapped as "…aaaa → …" over "ffff" — which reads as two keys. Safe
+       only because .key-chip wraps; see there. */
+    white-space: nowrap;
+}
+
+.key-flag {
+    /* The token .text-muted resolves to, not --bs-secondary, which is a fixed
+       grey sitting near 3:1 on a dark ground. */
+    color: var(--bs-secondary-color);
+    font-size: 0.8125rem;
+}
+
+/* A bare glyph rather than a .btn, following .pick-remove: inside a chip,
+   Bootstrap's button padding makes the chip twice the height of its text. */
+.key-remove,
+.key-check-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    line-height: 1;
+    color: var(--bs-secondary-color);
+}
+
+.key-remove:hover,
+.key-remove:focus-visible,
+.key-check-button:hover,
+.key-check-button:focus-visible {
+    color: var(--bs-body-color);
+}
+
+/* A word rather than a glyph (see the markup), so it needs the size the .key-flag
+   words next to it have — otherwise "Check" reads as the chip's loudest element. */
+.key-check-button {
+    font-size: 0.8125rem;
+}
+
+.key-check-button:disabled {
+    /* Bootstrap's .btn opacity rule does not reach a bare button. */
+    opacity: 0.55;
+}
+
+/* app.css's two-stop ring keys on .btn, and this is a bare glyph, so it was left
+   with the browser's default hairline outline — visible, but the one control on
+   the page ringing differently from every other. Spelled out rather than given a
+   .btn class, for .key-remove's own reason: Bootstrap's button padding would
+   double the chip's height.
+
+   The inner stop is --bs-secondary-bg, not --bs-body-bg: it is a halo, so it has
+   to be the ground this button actually sits on, and that ground is the chip.
+   Same split .key-chip.pending makes above, for the same reason. */
+.key-remove:focus-visible,
+.key-check-button:focus-visible {
+    outline: none;
+    border-radius: 0.125rem;
+    box-shadow: 0 0 0 0.1rem var(--bs-secondary-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}
+
+/* A page-wide Save gives no signal about *which* cards it will write, so every
+   card holding a pending change is marked. Two signals: this painted edge and
+   the word "Unsaved" in the card header. The card sits on --bs-body-bg, so the
+   link colour is the right one here — same ground as the chips. */
+.card-dirty {
+    box-shadow: inset 0.1875rem 0 0 var(--bs-link-color);
+}
+
+/* The verdict on a typed OpenRouter model id. Every state carries a glyph and a
+   whole sentence as well as a colour — the .key-flag rule, and the reason it
+   survives Dark Reader, greyscale and a washed-out panel. */
+.model-check {
+    /* Fits between the box's .form-text and the next control without the card
+       growing a gap when there is nothing to say. */
+    line-height: 1.5;
+}
+
+/* The -text-emphasis pair rather than --bs-success / --bs-warning: those are
+   fixed fills meant to sit *under* text, and both drop near 2:1 as body colour
+   on --bs-body-bg. The emphasis tokens are the ones Bootstrap 5.3 redefines per
+   theme for exactly this. */
+.model-ok,
+.key-ok {
+    color: var(--bs-success-text-emphasis);
+}
+
+.model-warn,
+.key-warn {
+    color: var(--bs-warning-text-emphasis);
+}
+
+/* A link, not a .btn: it sits inside a sentence, and Bootstrap's button padding
+   would break the line box. No inset bar — nothing here is a selected state,
+   which is what that idiom marks. It still has to ring on focus, because
+   app.css's .btn:focus is the only rule giving it one and .btn-link keeps it. */
+/* The gap between "Did you mean" and the first id, and after each comma. A margin
+   rather than a space in the markup: Blazor collapses whitespace at an element
+   boundary, so a trailing space inside the preceding span renders as
+   "Did you meananthropic/claude-opus-4" — measured in a browser at 10x, and
+   invisible to bUnit, which has no layout. */
+.model-suggestion {
+    margin-inline-start: 0.25rem;
+    text-decoration: underline;
+}
+
+.model-suggestion:focus-visible {
+    box-shadow: 0 0 0 0.1rem var(--bs-body-bg),
+                0 0 0 0.25rem var(--bs-link-color);
+}

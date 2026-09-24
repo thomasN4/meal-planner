@@ -221,7 +221,12 @@ design: it serves a trusted home LAN.
     no usable name — into a sentence rendered beside the review. The rest
     ("no output", "no result line") arrive as an empty `Lines` and keep the
     page's one failure message; warning as well would put two messages on
-    screen about one event. A silently short review is the same failure the
+    screen about one event. **A call that never answered is not an empty
+    answer**: the scanner's catch-all sets `ScanResult.Failed`, and the page says
+    the service didn't answer rather than "try a flatter photo". Over an API
+    that case is common enough to matter — one OpenRouter scan in three came
+    back with no answer text (PR #38 review), and the same photo scanned fine
+    on a retry, so blaming the photo sent someone to fix the wrong thing. A silently short review is the same failure the
     prompt's department-heading rule closes on the model's side, and `MaxLines`
     reopened it on ours. `MaxLines <= 0` means **no ceiling**: read the other
     way it is a setting that switches the feature off while looking like a
@@ -258,6 +263,286 @@ design: it serves a trusted home LAN.
     recomputed, and clearing would reopen the list under the name just chosen.
     A blank `Value` does clear it, and that is what lets a page empty the box
     and get a fresh list without reaching into the widget.
+- **Settings** — `/settings` (`Components/Pages/Settings.razor`) picks the
+  provider, model and effort for each of the three features, and stores one API
+  key per provider. `AiSettingsService` (+ `AiCatalog`, `Models/AiSettings.cs`) is
+  the choke point, shaped like `RecipeService` — factory-based DB access, records
+  out, its own clamping — and a **singleton**, because it holds no state and the
+  three singleton features need it. Model/provider/key are household-wide in
+  SQLite; **language and theme are per-browser in localStorage**
+  (`wwwroot/lang.js`, a sibling of `theme.js` rather than an addition to it) and
+  are the two controls that do *not* wait for the page's single Save.
+  `ThemeToggle` moved off `MainLayout`'s top row onto this page.
+  - **Read on every call.** Each feature calls `ResolveAsync(feature)` inside its
+    existing try as a call starts. A save applies from the next call with no
+    restart, a call already running keeps its model, and a failed settings read
+    degrades like any other failed call. `FeatureRoutingTests` pins the
+    no-restart claim.
+  - **No saved row means appsettings.json.** A feature with nothing saved runs
+    its section's `Model`/`Effort` on the CLI — exactly what it ran before the
+    page existed. The service reads those options; it has no defaults table of
+    its own, because two answers to "what runs by default" is how the page ends
+    up showing one model while the feature runs another. `FeatureChoice.IsDefault`
+    lets the card say so. `Enabled`, `ExecutablePath`, `TimeoutSeconds`,
+    `MaxBytes`/`MaxLines` and the categorizer's batch knobs **stay in
+    appsettings**; the per-card `p.in-effect` line says which, read off the live
+    `IOptions<T>`. The timeout applies to API calls too.
+  - **Two transports, one task definition.** Each `Claude*` feature keeps its
+    prompt, schema, payload builder, parser *and its own CLI `RunAsync`* (the
+    measured flag sets stay where they were measured). Any other provider goes
+    through an `IApiModelClient` (`Services/ModelCall.cs`) handed the same
+    prompt, schema and payload as a `ModelCall`, and returning the answer JSON
+    as text, or throwing. The classes keep their `Claude*` names on purpose; the
+    paper trail in this file is keyed on them.
+    - `AnthropicApiClient` uses the official **`Anthropic` NuGet SDK**
+      (`claude-api` guidance: SDK over raw HTTP wherever one exists). It sends no
+      `thinking` parameter (current models are adaptive by default, and Fable
+      400s on most explicit settings). It omits effort when null, because Haiku
+      4.5 rejects it. On Opus 5 and the Fable family it opts into **server-side
+      refusal fallback** (`fallbacks: "default"`, beta
+      `server-side-fallback-2026-07-01`) and nowhere else: a model with no
+      default configuration would 400 every call. `MaxRetries = 0`, so the SDK's
+      retries cannot stack past the feature's timeout.
+    - `OpenAiCompatibleClient` is raw `HttpClient` over **Chat Completions** for
+      both OpenAI and OpenRouter — the one shape both speak. OpenRouter has no
+      SDK, and the two differ in three fields (`BuildRequest`):
+      - effort is `reasoning_effort` on OpenAI and `reasoning.effort` on
+        OpenRouter;
+      - the output cap is `max_completion_tokens` on OpenAI and `max_tokens` on
+        OpenRouter;
+      - OpenRouter also gets `provider.require_parameters`, without which a route
+        to a backend that ignores `response_format` answers in prose.
+      A PDF is a `file` part, never an `image_url`.
+    - **Schemas are adapted per call, never edited** (`StrictSchema`): strict
+      modes reject the recipe schema's `minItems: 2`/`maxItems: 3` (Anthropic
+      takes 0 or 1 only), so the client strips them, and the CLI's schema stays
+      byte-identical. The prompt still asks for 2–3, and `ParseRecipes` takes any
+      count.
+    - Every refusal, `length`/`max_tokens` cut-off, content filter or HTTP error
+      **throws** in the client, and the feature's catch-all logs it as the reason.
+      Otherwise half a JSON document reaches a parser and gets reported as
+      "invalid JSON", which names the wrong failure.
+    - **No key is not special-cased in the features**: the client refuses before
+      sending, and the log line names the missing key. The page's needs-key alert
+      still warns rather than blocks, and now says the feature *will fail*.
+    - The receipt parser splits along the same line: `ParseScan` finds the
+      stream-json result, `ParseAnswer` locates a bare (possibly fenced) API
+      answer, and both meet in `ParseProducts`. `MaxLines` and `WarnAbout` are
+      decided there alone, so a scan warns the same way whoever read it.
+    - Success log lines carry `{Provider}/{Model}`. That is how to see what
+      actually ran.
+  - **`ResolvedModel` is the one record outside the service that holds a key**,
+    and it overrides `PrintMembers` so the generated `ToString` prints
+    `ApiKey = set`, never the key. A record logged whole would otherwise write
+    it out. `ResolveAsync` is for the features, never a page, for the same
+    reason `GetAsync` returns `CredentialStatus`.
+  - **No retry ladder, and still no notifier.** The primary key is the enum
+    value, so racing writers contend for one row, and nothing ever deletes a row
+    (clearing a key nulls a column), so one catch-and-reread covers the insert
+    race. The notifier question was parked until something read settings live.
+    The answer is still no:
+    - features read per call, so there is no in-memory copy to go stale;
+    - a stale second tab's Save writes only the cards *it* made dirty, so it can
+      overwrite a feature only by editing that same feature — last writer wins,
+      never a silent revert of something it did not touch.
+  - **The suite never reaches a provider.** `FakeHttp` is both the handler and
+    the `IHttpClientFactory`, and `AnthropicClient.HttpClient` accepts it, so all
+    three clients run end to end with no network. Its responder is handed the
+    **request's own token**: one that waited on xUnit's token instead never saw
+    the client's timeout and hung the whole run rather than failing. The
+    routing tests point `ExecutablePath` at a path that does not exist, so a
+    routing regression fails there instead of spawning a real `claude`.
+  - **An unreadable enum column is not caught by `Enum.IsDefined` in a service.**
+    EF's `HasConversion<string>()` throws during *materialization*, before any
+    service code runs, so a hand-edited or downgraded database took the whole
+    page down rather than degrading. Two layers now, and they are not
+    interchangeable: `AiSettingsService.GetAsync` filters unknown `Feature` and
+    `Provider` values out **in SQL**, because those say *which* row this is and a
+    model id without the provider it was chosen for means nothing — the row is
+    skipped whole and the feature falls back to its default. `TolerantEnumConverters`
+    is the second layer, for `Effort` and for any *other* query over these tables:
+    it keeps a count or a later report from throwing. A converter body is an
+    expression tree, so the parse has to live in a called method — `out var` will
+    not compile there.
+  - **The provider is inferred from the key's own prefix**, so the keys card is
+    one row rather than one per company. Longest prefix wins (`sk-proj-` has to
+    beat `sk-`), which is a property of the table rather than of an `if` ladder.
+    The guess is always stated in words before it is committed; an unrecognised
+    prefix reveals a dropdown and is **never refused**, because refusing breaks
+    the day a provider changes its prefix. **The prefix decides whenever it
+    can, and the dropdown answers only the case where it cannot** — one
+    predicate, the same one that shows the dropdown. Read the other way round
+    (`override ?? inferred`) a pick made for one key outlives it: paste an
+    unrecognised key, pick a provider, then paste a plainly-Anthropic key over
+    it, and that key queues under the old pick with the dropdown gone from the
+    page, so the hint is the only thing that could say so. And the hint keys on
+    the same predicate: **"Recognised as X" is a claim about the prefix**, only
+    ours to make when the prefix answered — a provider taken from the dropdown
+    reads "Filed under X, as you picked", one line under the control that
+    appeared precisely because the app could not work it out. **A key past
+    `MaxKeyLength` (200) is refused, never clamped** — a key cut to fit cannot
+    work, and the key check would then call a correctly pasted one refused. The
+    box's `maxlength` is one *over* the limit for the same reason: at the limit
+    the browser silently cut a long paste to something that fit. Keys are
+    plaintext in `mealplanner.db` — the honest consequence of a no-auth LAN
+    app. What is guaranteed is that the key never leaves the service:
+    `GetAsync` returns `CredentialStatus`, which **has no key field**, so a
+    page cannot render one by accident. There is deliberately no MCP tool for
+    settings; the control is the absence of the code path, same argument as
+    `reviewer-open-pr.sh` not existing.
+  - **Chips carry a word as well as a shape** (`new` / `replacing` / `clearing`),
+    and a replacing chip shows **both** tails — it is the only warning before an
+    overwrite, the same argument the receipt review makes for its effect badge.
+    The tails span is `nowrap` (split at phone width, `…aaaa → …` over `ffff`
+    read as two keys), and that is only safe because `.key-chip` **wraps**: a
+    single-line flex box is never narrower than the sum of its parts, and nowrap
+    alone scrolled the page sideways at 360px. Measured both halves in a browser.
+    `.key-chip` borrows `.pick-chip`'s geometry, `.use-up`'s painted edge and
+    `.exclude`'s dashed border plus strikethrough. Those keep `--bs-link-color`
+    where `.lang-choice.active` must use `--bs-btn-active-color`: a chip and a
+    card sit on the page, an `.active` outline button has a grey fill painted
+    over it where link colour measures 1.04:1. Same split `.pick-chip.use-up`
+    already makes against `.role-choice.active`; don't tidy it away.
+  - **An injected `IOptions<CategorizationOptions>` must not be named
+    `CategorizationOptions`** — the property shadows the type, and a `static`
+    member reading `CategorizationOptions.SectionName` then fails to compile with
+    an error that names the property rather than the collision. It is
+    `ClassifyOptions` for that reason alone.
+  - `AiCatalog` is a **dated snapshot** (model ids, key prefixes, per-provider
+    effort sets). Nothing in it is a whitelist: an id that leaves the list
+    degrades to the free-text "Other…" box with the stored value intact. Verify
+    ids against each provider's live list when editing it — Anthropic's come from
+    the `claude-api` skill, and the Claude 5 family takes **bare ids with no date
+    suffix** (`claude-haiku-4-5` also genuinely *rejects* an effort setting, which
+    is what `SupportsEffort: false` exists for).
+  - **An unfilled "Other…" box is an unfinished card, not a changed one.**
+    Picking Other… blanks the model, and a blank model is the one thing
+    `SaveFeatureAsync` refuses outright — so counting it as a change armed Save to
+    throw `ArgumentException` out of the write loop, and the catch-all answered
+    "Could not save. Nothing was written." A save holding one perfectly good change
+    on another card reported exactly that, naming neither the card nor the reason.
+    `Dirty(feature)` is the single place this is decided, and returning false there
+    covers all of it at once: the Unsaved flag, the painted card edge, the pending
+    count, whether Save is enabled, and which features the loop visits. The card
+    then has to **say** it is sitting out — `div.model-required`, rendered for
+    *every* provider because a blank model is refused whoever is being asked, and
+    naming what the feature keeps meanwhile, so "Nothing changed yet" under a
+    dropdown visibly reading "Other…" is explained rather than merely true.
+    Blocking Save instead was the wrong shape: one unfinished card would hold the
+    others' legitimate changes hostage, and the needs-key alert already sets the
+    precedent that a card warns without blocking the page.
+  - **A save that stops partway rereads what is stored and rebuilds only the
+    cards it wrote.** It used to call `LoadAsync`, which rebuilds *every* draft,
+    so the cards the loop never reached snapped back to their stored values with
+    no Unsaved flag, under "Saved 1 of 2, then stopped. The rest are still
+    pending." (PR #38 review, reproduced with a SQLite trigger refusing one
+    card's write; `A_save_that_stops_partway…` uses the same trigger). The
+    "of N" is counted before the first write, because afterwards "pending"
+    depends on whether the stored copy has been reread yet. If the reread fails
+    too, no draft is touched: a written card stays dirty and a retry rewrites
+    it, where rebuilding it from the stale copy would show the old value over a
+    database holding the new one.
+  - **The typed "Other…" id is checked, and only OpenRouter's can be.**
+    `OpenRouterCatalog` (`IOpenRouterCatalog`) reads
+    `GET https://openrouter.ai/api/v1/models`, which is **public and
+    unauthenticated** — OpenAI's and Anthropic's model lists both need a key, so
+    their boxes keep "Nothing checks it." and that sentence stays true. Decided
+    rather than fallen into:
+    - **no `Authorization` header**, pinned by a test. The check has to work
+      *before* a key is stored, which is exactly when someone is setting a feature
+      up and most likely to mistype, and a key would make a failure ambiguous
+      between a bad id and a bad key — the one distinction the verdicts exist to
+      keep;
+    - **the whole list, not `/models/{id}/endpoints`.** The per-id route answers
+      200/404 cleanly and costs 1–10 KB against 740 KB, but it can only ever say
+      *no*. The list is what makes "did you mean…" possible, and the capability
+      flags come with it free;
+    - **"valid" means usable here, not merely real.** The request sends
+      `response_format: json_schema` with `strict` and
+      `provider.require_parameters`, so the flag that decides whether a listed id
+      works is `structured_outputs` — measured 2026-09-19, 362 of 447 models carry
+      it, and `z-ai/glm-5.3-flashx` is a real id whose every answer would come back
+      as prose. Receipt scanning also needs `image` in
+      `architecture.input_modalities`, and the effort control is moot without
+      `reasoning`;
+    - **it warns and never blocks**, the needs-key alert's posture and the reason
+      `AiCatalog` is not a whitelist: a check that refuses breaks the day
+      OpenRouter adds a model faster than we read about it. `Unchecked` is a third
+      verdict, never folded into `NotListed` — "we could not ask" said as "it does
+      not exist" is a wrong answer stated confidently. A failed fetch keeps the
+      **last good snapshot** past its TTL for the same reason; only a cold cache
+      reports Unchecked;
+    - the line is **`aria-live="polite"`**, not a second `role="status"` (the page
+      has exactly one and a test counts it) and not `role="alert"`, which is
+      assertive and would interrupt a screen reader on every debounce tick. It
+      renders below the picker row, never in it — every `div.row` here must sum to
+      12 `col-md-*`. The suggestion buttons must not be `btn-primary`; Save is the
+      page's only one, same trap as the recipe role buttons;
+    - the 400 ms debounce and the catalogue's 10 s fetch timeout are the **page's**
+      clocks, not the feature's 90/180/120 s. Waiting three minutes to mention a
+      typo is the same as saying nothing. There is deliberately **no check on page
+      load**: a stored id says nothing until someone touches the box, which keeps
+      /settings off the network for a visit that changes nothing.
+  - **A key is checked the same way, and it warns rather than blocking too.**
+    `ApiKeyChecker` (`IApiKeyChecker`) asks each provider whether a key is any
+    good, on its cheapest **auth-only** endpoint — Anthropic `GET /v1/models`
+    through the SDK, OpenAI `GET /v1/models`, OpenRouter `GET /api/v1/key` —
+    none of which bills a token. Nothing checked one before, so a real key with
+    a character deleted saved silently and surfaced days later as ingredients
+    stuck in `Other`. Decided rather than fallen into:
+    - **on Add, and on a `Check` button per chip, never as you type.** The
+      failure being caught is a key edited down to a broken one, so a debounce
+      would send every intermediate state out as a failed authentication, which
+      is what providers rate-limit. Same reason the SDK path sets
+      `MaxRetries = 0`: one click has to be one attempt. No check on page load
+      either — the model-id check's rule, for the same reason;
+    - **only 401 is a rejection.** 403 is usually a region block, an org
+      permission or a project-scoped key, and 429 is the provider being busy;
+      both arrive as `Unchecked` carrying their status, because a confident
+      wrong "refused" invites someone to delete a working key. Two things the
+      SDK path needs that the raw ones do not: `AnthropicIOException` is **not**
+      an `AnthropicApiException`, and the SDK's error-body reader throws
+      `InvalidOperationException` when something that is not Anthropic answers
+      (a proxy, a gateway). Its last catch is everything-but-cancellation for
+      that reason, and a test pins each;
+    - **the response body is never read — only the status.** Reusing
+      `OpenAiCompatibleClient.ErrorMessage` to put the provider's own sentence
+      on screen is the obvious tidy-up and is the leak: OpenAI's 401 echoes the
+      key back in masked form, and a short key is barely masked. It is also why
+      `ApiKeyCheck(Verdict, Provider, int? Status)` has **no string member** —
+      where `ResolvedModel` needs a `PrintMembers` override this needs nothing,
+      and a `string? Detail` is the change that breaks it;
+    - **two methods, because of the page boundary.** `CheckStoredAsync` reads
+      the key through `GetApiKeyAsync` *inside the service* and hands back only
+      a verdict, so the page goes on holding nothing but keys the user just
+      pasted. One key-taking method would have forced a page to fetch a stored
+      one, which is what `CredentialStatus` having no key field prevents;
+    - **a blank key must never reach the SDK.** Given none it resolves
+      `ANTHROPIC_API_KEY` / `ANTHROPIC_PROFILE` from the environment (verified
+      in the assembly), so a blank one would check *this machine's* credentials
+      and report a key nobody stored as accepted. The early `Blank` return is
+      the guard;
+    - **"accepted", never "works".** These endpoints authenticate; they do not
+      prove the key can pay, or that its scope covers what the features send. A
+      key with no credit passes here and 402s on the next real call. It is the
+      mirror of the catalogue's "valid means usable here, not merely real":
+      there the capability could be checked, here it cannot, so the sentence
+      must not imply it;
+    - **no cache, no TTL, no gate**, unlike the catalogue next door: one check
+      is one deliberate click, a cached "accepted" is a lie waiting to happen,
+      and the cache key would have to be either the provider (wrong the moment
+      a key is pasted over another) or the key itself, parked in a long-lived
+      singleton. **`ToggleKey` clears the verdict explicitly** — the region
+      walks `Chips()`, so a cleared key's line goes with its chip, but undoing
+      a pending key over a provider that *also* has a stored key leaves the
+      chip wearing a verdict about the key just dropped;
+    - the control is the **word `Check`**, not a glyph: the chip's glyph slot
+      is taken by `✕`/`↶`, and nothing unambiguously means "ask the provider
+      whether this credential works". Measured in a browser 2026-09-20 — three
+      bogus keys, one per provider, all three answered 401 and read "refused
+      this key (401)"; behind a dead proxy the same key read "Couldn't reach…"
+      in muted text with Save still enabled.
+
 - **Theming** — `wwwroot/theme.js` is the **single owner** of the colour theme:
   it resolves System/Light/Dark, stamps `data-bs-theme` on `<html>`, and
   persists to localStorage. `Components/Layout/ThemeToggle.razor` is a view over
@@ -377,6 +662,21 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     honest about *not* biting — `Adding_reports_what_it_did_in_the_live_region`
     cannot cover `ShowStatus`'s `StateHasChanged`, because bUnit renders at
     handler completion regardless; the comment says so, leave it saying so.
+    - **Two bUnit traps, both of which produce a confident wrong answer**, and both
+      new here because these are the first page tests whose component re-renders
+      *between two statements* — the debounced check lands out of band through
+      `InvokeAsync(StateHasChanged)`, with no click to hang it off.
+      - **An element wrapper captured before that render answers from the DOM as it
+        was.** Measured: `Card(…).QuerySelectorAll("div.model-check")` returned one
+        element for a card whose live markup held none, while `OuterHtml` on the same
+        node was correct. A count and an `OuterHtml` disagreeing is the tell. Scope
+        the selector and re-query from the component (`cut.Find($"…card… {sel}")`),
+        and read collections through `cut.Nodes`.
+      - **`.Change()` returns before the render it causes has landed.** The first
+        query after one reads the old DOM, and the second reads the new one — so
+        adding a debug print "fixed" the failure, which is how you would talk
+        yourself out of a real bug. `WaitForElement` / `WaitForAssertion` around
+        anything read after a change; never a bare assert.
   - **`UploadFiles` blocks until the handler it triggers has finished**, unlike
     `Click()`. Any test that parks a scan on a gate and then wants to click
     something has to upload on its own thread (`Task.Run`) — inline, there is no
@@ -698,7 +998,11 @@ acceptable state; the project builds with `TreatWarningsAsErrors`.
     MCP server; `--no-session-persistence` so ingredients don't each leave a
     session file behind.
   - `--effort low`, not `medium`: the answer is pinned to 13 enum values, so
-    there is no deliberation to buy.
+    there is no deliberation to buy. That is the *default* (appsettings.json);
+    `/settings` can change model and effort per feature, and a null effort
+    **drops the `--effort` pair entirely** rather than sending it empty.
+    `CliArguments` is the one place each feature builds its argv, split out so
+    `FeatureRoutingTests` can assert it without spawning anything.
   - **Batch.** Eight names cost 3.4s against one name's 3.3s — spawning the
     process dominates — which is why the interface takes a list.
   - `--tools ""` behaved inconsistently across runs, so nothing depends on it;

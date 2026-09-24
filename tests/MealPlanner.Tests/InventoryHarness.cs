@@ -1,6 +1,7 @@
 using MealPlanner.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace MealPlanner.Tests;
 
@@ -74,6 +75,19 @@ internal sealed class InventoryHarness : IAsyncDisposable
 
     /// <summary>A <see cref="RecipeService"/> over the same database.</summary>
     public RecipeService NewRecipeService() => new(Factory);
+
+    /// <summary>A settings service over the same file — a second tab, or a
+    /// feature resolving what a page just wrote. Options default to the
+    /// options classes' own defaults, i.e. what appsettings.json ships.</summary>
+    public AiSettingsService NewAiSettingsService(
+        CategorizationOptions? categorization = null,
+        RecipeGenerationOptions? recipes = null,
+        ReceiptScanningOptions? receipts = null) =>
+        new(
+            Factory,
+            Options.Create(categorization ?? new CategorizationOptions()),
+            Options.Create(recipes ?? new RecipeGenerationOptions()),
+            Options.Create(receipts ?? new ReceiptScanningOptions()));
 
     /// <summary>
     /// Runs <paramref name="work"/> <paramref name="count"/> times genuinely in

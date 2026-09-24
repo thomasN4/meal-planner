@@ -10,6 +10,12 @@
        <html> ahead of the first paint. Anything later — defer, end of <body>,
        a Blazor component — shows a frame of the wrong theme first. *@
     <script src="@Assets["theme.js"]"></script>
+    @* Deferred, unlike theme.js, because this one paints nothing — it stores a
+       preference and stops. When it starts stamping <html lang>, move it up
+       beside theme.js and add the enhancedload hook; a late stamp would then be
+       a visible frame of the wrong language, which is exactly theme.js's
+       problem. *@
+    <script src="@Assets["lang.js"]" defer></script>
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["MealPlanner.styles.css"]" />
