@@ -1036,12 +1036,21 @@ else
                 // the user has just called off is the same bug as ignoring the
                 // button — they asked for nothing to happen.
             }
+            else if (result.Failed)
+            {
+                // The call itself never came back with an answer, so nothing
+                // looked at the photo. "Try a flatter photo" here sends someone
+                // off to re-photograph a receipt that was fine, when scanning the
+                // same file again is what works.
+                scanError = "The scan didn't come back with an answer — that's the "
+                    + "service, not your photo. Try scanning it again, or add the items "
+                    + "by hand above.";
+            }
             else if (result.Lines.Count == 0)
             {
-                // The scanner does not throw — an empty list is the whole of
-                // the failure signal, and the log holds the reason. From here
-                // "nothing came back" and "nothing legible on it" are the same
-                // event, so the message covers both without guessing.
+                // An answer with nothing usable on it, or output the parser
+                // could not read; the log holds which. From here the two are
+                // the same event, so the message covers both without guessing.
                 scanError = "Nothing readable on that one. Try a flatter photo, "
                     + "or add the items by hand above.";
             }

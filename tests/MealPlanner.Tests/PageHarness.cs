@@ -222,7 +222,8 @@ internal sealed class FakeRecipeGenerator : IRecipeGenerator
 /// <summary>
 /// Stands in for <see cref="ClaudeReceiptScanner"/> without a subprocess.
 /// Keeps the real thing's contract, which is the part worth faking: it never
-/// throws, and an empty <see cref="Result"/> is how a failure arrives.
+/// throws, and an empty <see cref="Result"/> is how a failure arrives —
+/// with <see cref="Failed"/> set when the call itself never answered.
 /// </summary>
 internal sealed class FakeReceiptScanner : IReceiptScanner
 {
@@ -239,6 +240,9 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
     /// lines it wants and still exercise the warning.
     /// </summary>
     public string? Warning { get; set; }
+
+    /// <summary>What the real scanner reports when the call itself never answered.</summary>
+    public bool Failed { get; set; }
 
     public IReadOnlyList<ReceiptFile> Files
     {
@@ -265,7 +269,7 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
             await Gate.Task.WaitAsync(ct);
         }
 
-        return new ScanResult(Result, Warning);
+        return new ScanResult(Result, Warning, Failed);
     }
 }
 

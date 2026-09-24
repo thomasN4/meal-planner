@@ -221,7 +221,12 @@ design: it serves a trusted home LAN.
     no usable name — into a sentence rendered beside the review. The rest
     ("no output", "no result line") arrive as an empty `Lines` and keep the
     page's one failure message; warning as well would put two messages on
-    screen about one event. A silently short review is the same failure the
+    screen about one event. **A call that never answered is not an empty
+    answer**: the scanner's catch-all sets `ScanResult.Failed`, and the page says
+    the service didn't answer rather than "try a flatter photo". Over an API
+    that case is common enough to matter — one OpenRouter scan in three came
+    back with no answer text (PR #38 review), and the same photo scanned fine
+    on a retry, so blaming the photo sent someone to fix the wrong thing. A silently short review is the same failure the
     prompt's department-heading rule closes on the model's side, and `MaxLines`
     reopened it on ours. `MaxLines <= 0` means **no ceiling**: read the other
     way it is a setting that switches the feature off while looking like a

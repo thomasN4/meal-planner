@@ -76,21 +76,32 @@ public sealed record ScannedLine(string Name, string Quantity, bool IsFood, stri
 /// <para>
 /// Not to be confused with the parser's <c>problem</c> string, which stays in
 /// the log: that one also names outright failures ("no output", "no result line
-/// in output"), and those arrive here as an empty <paramref name="Lines"/> —
-/// still the whole of the failure signal, still without a warning, because the
-/// page says "nothing readable on that one" for itself.
+/// in output"), and those arrive here as an empty <paramref name="Lines"/>
+/// without a warning, because the page says "nothing readable on that one" for
+/// itself.
+/// </para>
+/// <para>
+/// <paramref name="Failed"/> means the call itself never produced an answer —
+/// no key, no network, a timeout, a provider that answered with nothing. The
+/// page used to see that as an empty list like any other and told the household
+/// to try a flatter photo, blaming a photograph nothing had looked at. Measured
+/// over OpenRouter on 2026-09-23: one scan in three came back with no answer
+/// text, and the same request replayed worked. An answer with nothing usable on
+/// it is still an empty <paramref name="Lines"/> with <paramref name="Failed"/>
+/// false; that one may well be the photo.
 /// </para>
 /// </summary>
-public sealed record ScanResult(IReadOnlyList<ScannedLine> Lines, string? Warning = null);
+public sealed record ScanResult(IReadOnlyList<ScannedLine> Lines, string? Warning = null, bool Failed = false);
 
 /// <summary>
 /// Reads the grocery lines off a photographed or scanned receipt.
 /// <para>
 /// Implementations must not throw. A failed scan means "nothing to review",
 /// never a broken page: the household's fallback is the add form that has
-/// always been there. An empty list is the whole of the failure signal and the
-/// log carries the reason; the only exception let out is
-/// <see cref="OperationCanceledException"/> when the caller's own token fired.
+/// always been there. A failure arrives as an empty list with
+/// <see cref="ScanResult.Failed"/> set, and the log carries the reason; the only
+/// exception let out is <see cref="OperationCanceledException"/> when the
+/// caller's own token fired.
 /// </para>
 /// </summary>
 public interface IReceiptScanner

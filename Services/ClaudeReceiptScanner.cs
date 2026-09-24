@@ -210,9 +210,10 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         {
             // Anything at all — CLI missing, not authenticated, no key stored,
             // no network, timeout, an image the model refused. The page shows its error
-            // state and the add form still works; nothing else breaks.
+            // state and the add form still works; nothing else breaks. Failed, so
+            // the page does not blame the photo for a call that never answered.
             _logger.LogWarning(ex, "Receipt scan failed for {FileName}", file.FileName);
-            return new ScanResult([]);
+            return new ScanResult([], Failed: true);
         }
     }
 

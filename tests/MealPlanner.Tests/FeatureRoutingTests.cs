@@ -27,6 +27,15 @@ public class FeatureRoutingTests
         }
     }
 
+    /// <summary>What an API client does when the provider answers with nothing usable.</summary>
+    private sealed class FailingApiClient(AiProvider provider) : IApiModelClient
+    {
+        public AiProvider Provider { get; } = provider;
+
+        public Task<string> CompleteJsonAsync(ModelCall call, ResolvedModel model, CancellationToken ct = default) =>
+            throw new InvalidOperationException("The response carried no answer text.");
+    }
+
     // ---- the CLI's argv ----
 
     public static TheoryData<string> Features => [nameof(AiFeature.Categorization), nameof(AiFeature.RecipeGeneration), nameof(AiFeature.ReceiptScanning)];
@@ -216,6 +225,38 @@ public class FeatureRoutingTests
         Assert.Equal("image/png", call.Attachment!.MediaType);
         Assert.Equal([9, 8, 7], call.Attachment.Content);
         Assert.Contains("\"products\"", call.ResponseSchema, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The two empty scans the page words differently: a call that never
+    /// answered is not the photo's fault, and an answer with nothing on it may be.
+    /// </summary>
+    [Fact]
+    public async Task A_scan_whose_call_failed_says_so_and_an_empty_answer_does_not()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var settings = harness.NewAiSettingsService();
+        await settings.SetApiKeyAsync(AiProvider.OpenRouter, "sk-or-v1-routing-test-00");
+        await settings.SaveFeatureAsync(
+            AiFeature.ReceiptScanning, AiProvider.OpenRouter, "google/gemini-3.6-flash", null);
+        var options = Options.Create(new ReceiptScanningOptions { ExecutablePath = NoCli });
+        var file = new ReceiptFile([1], "image/png", "r.png");
+
+        var failed = await new ClaudeReceiptScanner(
+                options, settings, [new FailingApiClient(AiProvider.OpenRouter)],
+                new CapturingLogger<ClaudeReceiptScanner>())
+            .ScanAsync(file);
+
+        Assert.True(failed.Failed);
+        Assert.Empty(failed.Lines);
+
+        var empty = await new ClaudeReceiptScanner(
+                options, settings, [new FakeApiClient(AiProvider.OpenRouter, """{"products":[]}""")],
+                new CapturingLogger<ClaudeReceiptScanner>())
+            .ScanAsync(file);
+
+        Assert.False(empty.Failed);
+        Assert.Empty(empty.Lines);
     }
 
     [Fact]
