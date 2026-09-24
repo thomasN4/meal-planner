@@ -1,6 +1,7 @@
 using AngleSharp.Dom;
 using AngleSharp.Html.Dom;
 using MealPlanner.Components.Pages;
+using Microsoft.Data.Sqlite;
 
 namespace MealPlanner.Tests;
 
@@ -225,6 +226,68 @@ public class SettingsPageTests
             var status = Assert.Single(cut.FindAll("div[role=status]"));
             Assert.Contains("Saved 1 change", status.TextContent, StringComparison.Ordinal);
             Assert.Contains("next call", status.TextContent, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// The reviewer's reproduction, with the same instrument: a trigger that
+    /// refuses one card's write in the real SQLite file, so the loop stops after
+    /// the first feature. The catch used to reload every draft from the
+    /// database, which reset the two cards it never reached — no Unsaved flag,
+    /// the edit gone — under a status line saying they were still pending.
+    /// </summary>
+    [Fact]
+    public async Task A_save_that_stops_partway_keeps_the_cards_it_did_not_reach()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        await ExecuteAsync(page,
+            "CREATE TRIGGER refuse_recipe BEFORE INSERT ON FeatureAiSettings " +
+            "WHEN NEW.Feature = 'RecipeGeneration' " +
+            "BEGIN SELECT RAISE(ABORT, 'refused by test'); END");
+
+        var cut = page.RenderSettings();
+        foreach (var feature in Enum.GetValues<AiFeature>())
+        {
+            Select(cut, feature, "provider-select").Change(nameof(AiProvider.OpenAi));
+        }
+
+        cut.Find("input.key-input").Input("sk-proj-partial-save-key-4444");
+        cut.Find("button.add-key").Click();
+        Assert.StartsWith("4 pending changes", cut.Find("span.dirty-hint").TextContent, StringComparison.Ordinal);
+
+        cut.Find("button.save-settings").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Saved 1 of 4, then stopped", cut.Find("div[role=status]").TextContent,
+                StringComparison.Ordinal));
+
+        var dirty = cut.FindAll("div.feature-card.card-dirty").Select(c => c.GetAttribute("data-feature")).ToList();
+        Assert.Equal([nameof(AiFeature.RecipeGeneration), nameof(AiFeature.ReceiptScanning)], dirty);
+        Assert.Equal(nameof(AiProvider.OpenAi), Selected(Select(cut, AiFeature.RecipeGeneration, "provider-select")));
+        Assert.Equal(nameof(AiProvider.OpenAi), Selected(Select(cut, AiFeature.ReceiptScanning, "provider-select")));
+        Assert.StartsWith("3 pending changes", cut.Find("span.dirty-hint").TextContent, StringComparison.Ordinal);
+
+        await cut.InvokeAsync(async () =>
+        {
+            var stored = await page.OutOfCircuitSettings().GetAsync();
+            Assert.Equal(AiProvider.OpenAi, Choice(stored, AiFeature.Categorization).Provider);
+            Assert.Equal(AiProvider.ClaudeCli, Choice(stored, AiFeature.RecipeGeneration).Provider);
+            Assert.Null(await page.OutOfCircuitSettings().GetApiKeyAsync(AiProvider.OpenAi));
+        });
+
+        // The retry the message invites writes the rest, and only the rest.
+        await ExecuteAsync(page, "DROP TRIGGER refuse_recipe");
+        cut.Find("button.save-settings").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Saved 3 changes", cut.Find("div[role=status]").TextContent, StringComparison.Ordinal));
+        await cut.InvokeAsync(async () =>
+        {
+            var stored = await page.OutOfCircuitSettings().GetAsync();
+            Assert.All(stored.Features, f => Assert.Equal(AiProvider.OpenAi, f.Provider));
+            Assert.Equal(
+                "sk-proj-partial-save-key-4444",
+                await page.OutOfCircuitSettings().GetApiKeyAsync(AiProvider.OpenAi));
         });
     }
 
@@ -729,6 +792,17 @@ public class SettingsPageTests
 
     private static FeatureChoice Choice(AiSettings settings, AiFeature feature) =>
         settings.Features.First(f => f.Feature == feature);
+
+    // Straight at the harness's file, unpooled like the harness itself (AGENTS.md,
+    // issue #24): this is how a test makes the real database refuse a write.
+    private static async Task ExecuteAsync(PageHarness page, string sql)
+    {
+        await using var connection = new SqliteConnection($"Data Source={page.DatabasePath};Pooling=False");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
 
     // ---- the empty "Other…" box ----
 

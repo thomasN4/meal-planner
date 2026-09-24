@@ -418,6 +418,17 @@ design: it serves a trusted home LAN.
     Blocking Save instead was the wrong shape: one unfinished card would hold the
     others' legitimate changes hostage, and the needs-key alert already sets the
     precedent that a card warns without blocking the page.
+  - **A save that stops partway rereads what is stored and rebuilds only the
+    cards it wrote.** It used to call `LoadAsync`, which rebuilds *every* draft,
+    so the cards the loop never reached snapped back to their stored values with
+    no Unsaved flag, under "Saved 1 of 2, then stopped. The rest are still
+    pending." (PR #38 review, reproduced with a SQLite trigger refusing one
+    card's write; `A_save_that_stops_partway…` uses the same trigger). The
+    "of N" is counted before the first write, because afterwards "pending"
+    depends on whether the stored copy has been reread yet. If the reread fails
+    too, no draft is touched: a written card stays dirty and a retry rewrites
+    it, where rebuilding it from the stale copy would show the old value over a
+    database holding the new one.
   - **The typed "Other…" id is checked, and only OpenRouter's can be.**
     `OpenRouterCatalog` (`IOpenRouterCatalog`) reads
     `GET https://openrouter.ai/api/v1/models`, which is **public and

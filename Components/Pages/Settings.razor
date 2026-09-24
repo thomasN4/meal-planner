@@ -593,13 +593,18 @@ else
 
     private async Task LoadAsync()
     {
-        settings = await SettingsSvc.GetAsync();
+        await RefreshStoredAsync();
         drafts.Clear();
-        foreach (var choice in settings.Features)
+        foreach (var choice in settings!.Features)
         {
             drafts[choice.Feature] = ToDraft(choice);
         }
     }
+
+    // The stored half of LoadAsync alone. A save that stops partway needs exactly
+    // this and not the rest: rebuilding the drafts would throw away the edits it
+    // never reached.
+    private async Task RefreshStoredAsync() => settings = await SettingsSvc.GetAsync();
 
     private static Draft ToDraft(FeatureChoice choice) => new()
     {
@@ -922,6 +927,10 @@ else
 
         saving = true;
         var written = 0;
+        // Counted before anything is written: once a write lands, what "pending"
+        // means depends on whether the stored values have been reread yet.
+        var total = PendingCount;
+        var savedFeatures = new List<AiFeature>();
 
         try
         {
@@ -929,6 +938,7 @@ else
             {
                 var draft = drafts[feature];
                 await SettingsSvc.SaveFeatureAsync(feature, draft.Provider, draft.Model, draft.Effort);
+                savedFeatures.Add(feature);
                 written++;
             }
 
@@ -958,16 +968,36 @@ else
         {
             Logger.LogWarning(ex, "Could not save settings");
 
-            // What did land is reloaded, so the drafts still showing as unsaved
-            // are exactly the ones still unwritten. "The rest are still pending"
-            // has to be true, or the retry this invites writes everything twice —
-            // the same rule the receipt review follows when it prunes the rows it
-            // already wrote.
-            await LoadAsync();
+            // "The rest are still pending" has to be true, or the retry this
+            // invites writes everything twice — the rule the receipt review follows
+            // when it prunes the rows it already wrote. So the stored values are
+            // reread and only the cards that were written are rebuilt from them;
+            // every other draft keeps its edit. This used to call LoadAsync, which
+            // rebuilds every draft: the cards the loop never reached snapped back
+            // to their stored values with no Unsaved flag, under a message saying
+            // they were still pending. Keys were never affected — the loop removes
+            // each one from pendingKeys as it lands, and LoadAsync leaves that alone.
+            try
+            {
+                await RefreshStoredAsync();
+                foreach (var feature in savedFeatures)
+                {
+                    drafts[feature] = ToDraft(Stored(feature));
+                }
+            }
+            catch (Exception reread)
+            {
+                // Leave every draft as it is. The written cards stay dirty against
+                // the stale copy and a retry rewrites them, which is harmless.
+                // Rebuilding them from that copy would show the old values while
+                // the database holds the new ones.
+                Logger.LogWarning(reread, "Could not reread settings after a failed save");
+            }
+
             ShowStatus(
                 written == 0
                     ? "Could not save. Nothing was written."
-                    : $"Saved {written} of {written + PendingCount}, then stopped. The rest are still pending.",
+                    : $"Saved {written} of {total}, then stopped. The rest are still pending.",
                 isError: true);
         }
         finally
