@@ -84,13 +84,16 @@ else
                prefix. @bind:event="oninput" costs a round trip per keystroke, the
                same deliberate trade the Ingredient box makes — on a LAN the latency
                is invisible, and the inferred-provider line has to keep up with the
-               typing or it is worse than useless. *@
+               typing or it is worse than useless. maxlength is one past the longest
+               key stored, not the limit itself: at the limit the browser cut a long
+               paste down to a key that fit, and nothing could tell it had. One over
+               still bounds what crosses the circuit, and lets KeyTooLong say so. *@
             <span class="form-label mb-1">Add a key</span>
             <div class="row g-2 align-items-end">
                 <div class="@(NeedsProviderChoice ? "col-md-6" : "col-md-10")">
                     <input type="password"
                            class="form-control key-input"
-                           maxlength="200"
+                           maxlength="@(AiSettingsService.MaxKeyLength + 1)"
                            placeholder="Paste an API key"
                            aria-label="API key"
                            @bind="keyDraft"
@@ -743,7 +746,11 @@ else
     private bool NeedsProviderChoice =>
         !string.IsNullOrWhiteSpace(keyDraft) && AiCatalog.InferProvider(keyDraft) is null;
 
-    private bool CanAddKey => !string.IsNullOrWhiteSpace(keyDraft) && keyProvider is not null;
+    // Refused rather than cut: a truncated key can never work, and the check
+    // would then report a correctly pasted key as refused by its provider.
+    private bool KeyTooLong => keyDraft.Trim().Length > AiSettingsService.MaxKeyLength;
+
+    private bool CanAddKey => !string.IsNullOrWhiteSpace(keyDraft) && !KeyTooLong && keyProvider is not null;
 
     private void ChooseKeyProvider(ChangeEventArgs e) =>
         keyProviderOverride = Enum.TryParse<AiProvider>(e.Value?.ToString(), out var provider)
@@ -755,6 +762,12 @@ else
         if (string.IsNullOrWhiteSpace(keyDraft))
         {
             return "The provider is read off the key itself — nothing to choose.";
+        }
+
+        if (KeyTooLong)
+        {
+            return $"That's longer than any API key we know of (over {AiSettingsService.MaxKeyLength} " +
+                   "characters) — check what was pasted.";
         }
 
         if (keyProvider is not { } provider)

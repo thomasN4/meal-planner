@@ -379,7 +379,11 @@ design: it serves a trusted home LAN.
     the same predicate: **"Recognised as X" is a claim about the prefix**, only
     ours to make when the prefix answered — a provider taken from the dropdown
     reads "Filed under X, as you picked", one line under the control that
-    appeared precisely because the app could not work it out. Keys are
+    appeared precisely because the app could not work it out. **A key past
+    `MaxKeyLength` (200) is refused, never clamped** — a key cut to fit cannot
+    work, and the key check would then call a correctly pasted one refused. The
+    box's `maxlength` is one *over* the limit for the same reason: at the limit
+    the browser silently cut a long paste to something that fit. Keys are
     plaintext in `mealplanner.db` — the honest consequence of a no-auth LAN
     app. What is guaranteed is that the key never leaves the service:
     `GetAsync` returns `CredentialStatus`, which **has no key field**, so a
@@ -389,6 +393,10 @@ design: it serves a trusted home LAN.
   - **Chips carry a word as well as a shape** (`new` / `replacing` / `clearing`),
     and a replacing chip shows **both** tails — it is the only warning before an
     overwrite, the same argument the receipt review makes for its effect badge.
+    The tails span is `nowrap` (split at phone width, `…aaaa → …` over `ffff`
+    read as two keys), and that is only safe because `.key-chip` **wraps**: a
+    single-line flex box is never narrower than the sum of its parts, and nowrap
+    alone scrolled the page sideways at 360px. Measured both halves in a browser.
     `.key-chip` borrows `.pick-chip`'s geometry, `.use-up`'s painted edge and
     `.exclude`'s dashed border plus strikethrough. Those keep `--bs-link-color`
     where `.lang-choice.active` must use `--bs-btn-active-color`: a chip and a

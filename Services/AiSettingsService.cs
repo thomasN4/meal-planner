@@ -81,7 +81,14 @@ public sealed record AiSettings(
 public class AiSettingsService
 {
     private const int MaxModelLength = 100;
-    private const int MaxKeyLength = 200;
+
+    /// <summary>
+    /// The longest key stored. Refused past this, never cut to it: a truncated
+    /// key cannot work, and the check would then call a correctly pasted key
+    /// refused. OpenAI's <c>sk-proj-</c> keys, the longest today, run to about 164.
+    /// Public so the page can say so before Save rather than after.
+    /// </summary>
+    public const int MaxKeyLength = 200;
 
     /// <summary>
     /// A key must be at least this long before its last four characters are
@@ -308,10 +315,17 @@ public class AiSettingsService
                 $"{AiCatalog.For(provider).Label} does not take an API key.", nameof(provider));
         }
 
-        var cleaned = Clamp(apiKey?.Trim(), MaxKeyLength);
-        if (string.IsNullOrEmpty(cleaned))
+        var cleaned = apiKey?.Trim() ?? string.Empty;
+        if (cleaned.Length == 0)
         {
             throw new ArgumentException("An API key is required.", nameof(apiKey));
+        }
+
+        if (cleaned.Length > MaxKeyLength)
+        {
+            throw new ArgumentException(
+                $"An API key longer than {MaxKeyLength} characters is not one any provider issues.",
+                nameof(apiKey));
         }
 
         var row = await UpsertKeyAsync(provider, cleaned, ct);

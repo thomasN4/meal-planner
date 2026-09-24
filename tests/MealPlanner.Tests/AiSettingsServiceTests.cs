@@ -226,6 +226,26 @@ public class AiSettingsServiceTests
             harness.NewAiSettingsService().SetApiKeyAsync(AiProvider.OpenAi, "   "));
     }
 
+    /// <summary>
+    /// Refused, not clamped like a model id: a key cut to fit cannot work, and
+    /// the key check would then call a correctly pasted key refused.
+    /// </summary>
+    [Fact]
+    public async Task A_key_past_the_limit_is_refused_whole_and_one_at_it_is_stored_whole()
+    {
+        await using var harness = await InventoryHarness.CreateAsync();
+        var service = harness.NewAiSettingsService();
+        var atLimit = "sk-proj-" + new string('k', AiSettingsService.MaxKeyLength - 8);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.SetApiKeyAsync(AiProvider.OpenAi, atLimit + "x"));
+        Assert.Null(await service.GetApiKeyAsync(AiProvider.OpenAi));
+
+        // Surrounding whitespace is not part of the key, so it does not count.
+        await service.SetApiKeyAsync(AiProvider.OpenAi, "  " + atLimit + "  ");
+        Assert.Equal(atLimit, await service.GetApiKeyAsync(AiProvider.OpenAi));
+    }
+
     [Fact]
     public async Task A_model_id_is_trimmed_and_clamped()
     {

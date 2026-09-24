@@ -483,6 +483,29 @@ public class SettingsPageTests
                 await page.OutOfCircuitSettings().GetApiKeyAsync(AiProvider.OpenRouter)));
     }
 
+    /// <summary>
+    /// The box's maxlength used to be the limit itself, so the browser cut a long
+    /// paste to a key that fit and nothing could tell. bUnit does not apply
+    /// maxlength, which is fine here: what is under test is the page refusing
+    /// anything past the limit rather than queueing it.
+    /// </summary>
+    [Fact]
+    public async Task A_key_longer_than_any_provider_issues_cannot_be_added_and_the_hint_says_why()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        var cut = page.RenderSettings();
+
+        Assert.Equal(
+            (AiSettingsService.MaxKeyLength + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cut.Find("input.key-input").GetAttribute("maxlength"));
+
+        cut.Find("input.key-input").Input("sk-proj-" + new string('k', 242));
+
+        Assert.True(cut.Find("button.add-key").HasAttribute("disabled"));
+        Assert.Contains("longer than any API key", cut.Find("div.key-hint").TextContent, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("span.key-chip"));
+    }
+
     [Fact]
     public async Task A_provider_with_no_key_warns_without_blocking()
     {
