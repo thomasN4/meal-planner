@@ -53,3 +53,55 @@ public enum IngredientRole
     Include,
     Exclude,
 }
+
+/// <summary>
+/// The three features that call a model. Spelled exactly like the
+/// <c>appsettings.json</c> section names (<c>Categorization</c>, not
+/// <c>IngredientClassification</c>) so the pass that wires these settings up
+/// maps one to one instead of carrying a second lookup table.
+/// </summary>
+public enum AiFeature
+{
+    Categorization,
+    RecipeGeneration,
+    ReceiptScanning,
+}
+
+/// <summary>
+/// Who answers the call. <see cref="ClaudeCli"/> is today's arrangement — the
+/// <c>claude</c> CLI on a subscription, needing no key of its own; the rest are
+/// HTTP APIs behind a key.
+/// </summary>
+public enum AiProvider
+{
+    ClaudeCli,
+    AnthropicApi,
+    OpenAi,
+    OpenRouter,
+}
+
+/// <summary>
+/// How hard the model should think.
+/// <para>
+/// An enum, against the <c>Effort { get; set; } = "low"</c> string the three
+/// options classes carry. A string tempts a caller to pass the stored word
+/// straight through, and the providers do not agree on the spelling —
+/// <c>--effort low</c> on the CLI, <c>output_config.effort</c> on the Anthropic
+/// API, <c>reasoning.effort</c> on OpenAI. An enum forces an explicit
+/// per-provider spelling function on the day that matters.
+/// </para>
+/// <para>
+/// <see cref="Minimal"/> exists only because OpenAI offers it; nothing else
+/// does, and <c>AiCatalog</c> is what keeps it off the other providers'
+/// dropdowns.
+/// </para>
+/// </summary>
+public enum AiEffort
+{
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}

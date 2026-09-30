@@ -1,14 +1,19 @@
 using System.Diagnostics;
 using System.Text.Json;
+using MealPlanner.Models;
 using Microsoft.Extensions.Options;
 
 namespace MealPlanner.Services;
 
 /// <summary>
-/// Reads a receipt by shelling out to the headless <c>claude</c> CLI, mirroring
-/// <see cref="ClaudeIngredientClassifier"/>'s process handling and flag set.
+/// Reads a receipt with whichever provider and model the household chose on
+/// <c>/settings</c> — by default the headless <c>claude</c> CLI, mirroring
+/// <see cref="ClaudeIngredientClassifier"/>'s process handling, flag set and
+/// routing. An API provider gets the same prompt and schema with the file as an
+/// image or PDF part of the request (<see cref="IApiModelClient"/>), and its
+/// answer meets the CLI's in <see cref="ParseProducts"/>.
 /// <para>
-/// The picture itself goes over stdin as a base64 content block, using
+/// On the CLI path, the picture goes over stdin as a base64 content block, using
 /// <c>--input-format stream-json</c>. That is what lets <c>--tools ""</c> stay
 /// true: the obvious alternative is to drop the upload in a temp directory and
 /// hand the model the <c>Read</c> tool, which would trade the whole no-tools
@@ -20,14 +25,30 @@ namespace MealPlanner.Services;
 /// </summary>
 public sealed class ClaudeReceiptScanner : IReceiptScanner
 {
+    /// <summary>The user turn beside the file, on every path.</summary>
+    private const string Ask = "Read the grocery lines off this receipt.";
+
+    /// <summary>
+    /// Sixty lines of name, quantity and department is a few thousand tokens;
+    /// the rest is room for a reasoning model's thinking, which counts against
+    /// this cap on OpenAI.
+    /// </summary>
+    private const int MaxOutputTokens = 16000;
+
     private readonly ReceiptScanningOptions _options;
+    private readonly AiSettingsService _settings;
+    private readonly IEnumerable<IApiModelClient> _apiClients;
     private readonly ILogger<ClaudeReceiptScanner> _logger;
 
     public ClaudeReceiptScanner(
         IOptions<ReceiptScanningOptions> options,
+        AiSettingsService settings,
+        IEnumerable<IApiModelClient> apiClients,
         ILogger<ClaudeReceiptScanner> logger)
     {
         _options = options.Value;
+        _settings = settings;
+        _apiClients = apiClients;
         _logger = logger;
     }
 
@@ -140,8 +161,29 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         try
         {
             var stopwatch = Stopwatch.StartNew();
-            var output = await RunAsync(BuildPayload(file), ct);
-            var lines = ParseScan(output, _options.MaxLines, out var problem);
+
+            // Per call, inside the try — see ClaudeIngredientClassifier. The two
+            // paths differ only in how the answer arrives: stream-json lines
+            // from the CLI, a bare JSON object from an API.
+            var model = await _settings.ResolveAsync(AiFeature.ReceiptScanning, ct);
+            string output;
+            IReadOnlyList<ScannedLine> lines;
+            string? problem;
+            if (model.Provider == AiProvider.ClaudeCli)
+            {
+                output = await RunAsync(BuildPayload(file), model, ct);
+                lines = ParseScan(output, _options.MaxLines, out problem);
+            }
+            else
+            {
+                output = await ApiModelClients.For(_apiClients, model.Provider).CompleteJsonAsync(
+                    new ModelCall(
+                        SystemPrompt, ResponseSchema, Ask,
+                        new ModelAttachment(file.Content, file.MediaType),
+                        MaxOutputTokens, TimeSpan.FromSeconds(_options.TimeoutSeconds)),
+                    model, ct);
+                lines = ParseAnswer(output, _options.MaxLines, out problem);
+            }
 
             if (problem is not null)
             {
@@ -154,8 +196,9 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
             // receipt is a record of what this household bought, and the log is
             // not the place for it.
             _logger.LogInformation(
-                "Read {Count} line(s) from {FileName} ({Bytes} bytes) in {ElapsedMs}ms",
-                lines.Count, file.FileName, file.Content.Length, stopwatch.ElapsedMilliseconds);
+                "Read {Count} line(s) from {FileName} ({Bytes} bytes) with {Provider}/{Model} in {ElapsedMs}ms",
+                lines.Count, file.FileName, file.Content.Length, model.Provider, model.Model,
+                stopwatch.ElapsedMilliseconds);
             return new ScanResult(lines, WarnAbout(problem, lines.Count));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -165,11 +208,12 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         }
         catch (Exception ex)
         {
-            // Anything at all — CLI missing, not authenticated, no network,
-            // timeout, an image the model refused. The page shows its error
-            // state and the add form still works; nothing else breaks.
+            // Anything at all — CLI missing, not authenticated, no key stored,
+            // no network, timeout, an image the model refused. The page shows its error
+            // state and the add form still works; nothing else breaks. Failed, so
+            // the page does not blame the photo for a call that never answered.
             _logger.LogWarning(ex, "Receipt scan failed for {FileName}", file.FileName);
-            return new ScanResult([]);
+            return new ScanResult([], Failed: true);
         }
     }
 
@@ -235,13 +279,48 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
                 content = new[]
                 {
                     block,
-                    new { type = "text", text = "Read the grocery lines off this receipt." },
+                    new { type = "text", text = Ask },
                 },
             },
         });
     }
 
-    private async Task<string> RunAsync(string payload, CancellationToken ct)
+    /// <summary>The CLI's argv — see <see cref="ClaudeIngredientClassifier.CliArguments"/>.</summary>
+    internal static IReadOnlyList<string> CliArguments(ResolvedModel model)
+    {
+        var arguments = new List<string> { "-p", "--model", model.Model };
+        if (AiEffortSpelling.For(AiProvider.ClaudeCli, model.Effort) is { } effort)
+        {
+            arguments.AddRange(["--effort", effort]);
+        }
+
+        arguments.AddRange(
+        [
+            "--system-prompt", SystemPrompt,
+            "--json-schema", ResponseSchema,
+            // These three travel together. stream-json input is the only way to
+            // hand the CLI an image without giving it a file and a tool to read
+            // it with; it requires the matching output format, which in turn
+            // requires --verbose. This is the invocation that was measured —
+            // dropping any one of them is a different experiment.
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--verbose",
+            // No agent loop: one round trip is the whole job.
+            "--tools", "",
+            // Keeps CLAUDE.md/AGENTS.md out of every scan.
+            "--setting-sources", "",
+            // Never attach this app's own MCP server to a call this app is
+            // making — that would be circular.
+            "--strict-mcp-config",
+            // One session file per receipt would be litter.
+            "--no-session-persistence",
+            "--disable-slash-commands",
+        ]);
+        return arguments;
+    }
+
+    private async Task<string> RunAsync(string payload, ResolvedModel model, CancellationToken ct)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -257,33 +336,7 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         // ArgumentList, never a joined string. Nothing user-supplied is in this
         // list — the receipt goes over stdin — but the rule holds for whatever
         // gets added later, and there is no shell here to quote against.
-        foreach (var argument in new[]
-                 {
-                     "-p",
-                     "--model", _options.Model,
-                     "--effort", _options.Effort,
-                     "--system-prompt", SystemPrompt,
-                     "--json-schema", ResponseSchema,
-                     // These three travel together. stream-json input is the
-                     // only way to hand the CLI an image without giving it a
-                     // file and a tool to read it with; it requires the
-                     // matching output format, which in turn requires
-                     // --verbose. This is the invocation that was measured —
-                     // dropping any one of them is a different experiment.
-                     "--input-format", "stream-json",
-                     "--output-format", "stream-json",
-                     "--verbose",
-                     // No agent loop: one round trip is the whole job.
-                     "--tools", "",
-                     // Keeps CLAUDE.md/AGENTS.md out of every scan.
-                     "--setting-sources", "",
-                     // Never attach this app's own MCP server to a call this app
-                     // is making — that would be circular.
-                     "--strict-mcp-config",
-                     // One session file per receipt would be litter.
-                     "--no-session-persistence",
-                     "--disable-slash-commands",
-                 })
+        foreach (var argument in CliArguments(model))
         {
             startInfo.ArgumentList.Add(argument);
         }
@@ -412,11 +465,9 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
         int maxLines,
         out string? problem)
     {
-        var lines = new List<ScannedLine>();
-
         if (!TryFindResult(output, out var result, out problem))
         {
-            return lines;
+            return [];
         }
 
         // structured_output is the parsed answer; "result" is the same JSON as
@@ -431,15 +482,69 @@ public sealed class ClaudeReceiptScanner : IReceiptScanner
                 || products.ValueKind != JsonValueKind.Array)
             {
                 problem = "no \"products\" array";
-                return lines;
+                return [];
             }
         }
         else if (!TryParseResultText(result, out products))
         {
             problem = "no structured output";
-            return lines;
+            return [];
         }
 
+        return ParseProducts(products, maxLines, out problem);
+    }
+
+    /// <summary>
+    /// Turns an API provider's answer — the schema's object, as text — into
+    /// proposed lines. No stream to search: the client has already taken the
+    /// answer out of the response. The JSON is still located rather than assumed
+    /// alone, because an OpenRouter backend can wrap it in a code fence even
+    /// under a schema, and the other two parsers make the same allowance.
+    /// </summary>
+    internal static IReadOnlyList<ScannedLine> ParseAnswer(
+        string answer,
+        int maxLines,
+        out string? problem)
+    {
+        var start = answer.IndexOf('{');
+        var end = answer.LastIndexOf('}');
+        if (start < 0 || end <= start)
+        {
+            problem = string.IsNullOrWhiteSpace(answer) ? "no output" : "no JSON object in output";
+            return [];
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(answer[start..(end + 1)]);
+            if (!document.RootElement.TryGetProperty("products", out var products)
+                || products.ValueKind != JsonValueKind.Array)
+            {
+                problem = "no \"products\" array";
+                return [];
+            }
+
+            return ParseProducts(products.Clone(), maxLines, out problem);
+        }
+        catch (JsonException ex)
+        {
+            problem = $"invalid JSON ({ex.Message})";
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Where both paths meet: the schema's <c>products</c> array, however it
+    /// arrived, to proposed lines. <c>MaxLines</c> and the problems
+    /// <see cref="WarnAbout"/> turns into on-screen warnings are decided here
+    /// and only here, so a scan warns the same way whoever read it.
+    /// </summary>
+    internal static IReadOnlyList<ScannedLine> ParseProducts(
+        JsonElement products,
+        int maxLines,
+        out string? problem)
+    {
+        var lines = new List<ScannedLine>();
         var skipped = 0;
         foreach (var product in products.EnumerateArray())
         {

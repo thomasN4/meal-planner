@@ -6,23 +6,38 @@ using Microsoft.Extensions.Options;
 namespace MealPlanner.Services;
 
 /// <summary>
-/// Generates recipe suggestions by shelling out to the headless <c>claude</c>
-/// CLI, mirroring <see cref="ClaudeIngredientClassifier"/>'s process handling
-/// and flag set. The inventory is embedded in the stdin prompt rather than
-/// fetched by the subprocess through the app's own MCP server: that keeps the
-/// hardened isolation flags (<c>--strict-mcp-config</c>, no tools) intact and
-/// keeps parsing a pure, testable function.
+/// Generates recipe suggestions with whichever provider and model the household
+/// chose on <c>/settings</c> — by default the headless <c>claude</c> CLI,
+/// mirroring <see cref="ClaudeIngredientClassifier"/>'s process handling, flag
+/// set and routing. The inventory is embedded in the prompt rather than
+/// fetched by the model through the app's own MCP server: that keeps the
+/// hardened isolation flags (<c>--strict-mcp-config</c>, no tools) intact on
+/// the CLI, gives an API provider nothing to call back into, and keeps parsing
+/// a pure, testable function.
 /// </summary>
 public sealed class ClaudeRecipeGenerator : IRecipeGenerator
 {
+    /// <summary>
+    /// Three recipes run to a few thousand tokens, and on OpenAI a reasoning
+    /// model's thinking counts against the same cap. Kept at the non-streaming
+    /// ceiling the Anthropic SDK is comfortable with rather than higher.
+    /// </summary>
+    private const int MaxOutputTokens = 16000;
+
     private readonly RecipeGenerationOptions _options;
+    private readonly AiSettingsService _settings;
+    private readonly IEnumerable<IApiModelClient> _apiClients;
     private readonly ILogger<ClaudeRecipeGenerator> _logger;
 
     public ClaudeRecipeGenerator(
         IOptions<RecipeGenerationOptions> options,
+        AiSettingsService settings,
+        IEnumerable<IApiModelClient> apiClients,
         ILogger<ClaudeRecipeGenerator> logger)
     {
         _options = options.Value;
+        _settings = settings;
+        _apiClients = apiClients;
         _logger = logger;
     }
 
@@ -160,7 +175,16 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
         try
         {
             var stopwatch = Stopwatch.StartNew();
-            var output = await RunAsync(payload, ct);
+
+            // Per call, inside the try — see ClaudeIngredientClassifier.
+            var model = await _settings.ResolveAsync(AiFeature.RecipeGeneration, ct);
+            var output = model.Provider == AiProvider.ClaudeCli
+                ? await RunAsync(payload, model, ct)
+                : await ApiModelClients.For(_apiClients, model.Provider).CompleteJsonAsync(
+                    new ModelCall(
+                        SystemPrompt, ResponseSchema, payload, null,
+                        MaxOutputTokens, TimeSpan.FromSeconds(_options.TimeoutSeconds)),
+                    model, ct);
 
             var inventoryNames = inventory
                 .Select(item => item.Name)
@@ -176,8 +200,8 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
             }
 
             _logger.LogInformation(
-                "Generated {Count} recipe(s) in {ElapsedMs}ms",
-                recipes.Count, stopwatch.ElapsedMilliseconds);
+                "Generated {Count} recipe(s) with {Provider}/{Model} in {ElapsedMs}ms",
+                recipes.Count, model.Provider, model.Model, stopwatch.ElapsedMilliseconds);
             return recipes;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -188,14 +212,42 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
         }
         catch (Exception ex)
         {
-            // Anything at all — CLI missing, not authenticated, no network,
-            // timeout. The page shows its error state; nothing else breaks.
+            // Anything at all — CLI missing, not authenticated, no key stored,
+            // no network, a refusal, timeout. The page shows its error state;
+            // nothing else breaks.
             _logger.LogWarning(ex, "Recipe generation failed");
             return [];
         }
     }
 
-    private async Task<string> RunAsync(string payload, CancellationToken ct)
+    /// <summary>The CLI's argv — see <see cref="ClaudeIngredientClassifier.CliArguments"/>.</summary>
+    internal static IReadOnlyList<string> CliArguments(ResolvedModel model)
+    {
+        var arguments = new List<string> { "-p", "--model", model.Model };
+        if (AiEffortSpelling.For(AiProvider.ClaudeCli, model.Effort) is { } effort)
+        {
+            arguments.AddRange(["--effort", effort]);
+        }
+
+        arguments.AddRange(
+        [
+            "--system-prompt", SystemPrompt,
+            "--json-schema", ResponseSchema,
+            // No agent loop: one round trip is the whole job.
+            "--tools", "",
+            // Keeps CLAUDE.md/AGENTS.md out of every generation.
+            "--setting-sources", "",
+            // Never attach this app's own MCP server to a call this app is
+            // making — that would be circular.
+            "--strict-mcp-config",
+            // One session file per generation would be litter.
+            "--no-session-persistence",
+            "--disable-slash-commands",
+        ]);
+        return arguments;
+    }
+
+    private async Task<string> RunAsync(string payload, ResolvedModel model, CancellationToken ct)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -211,24 +263,7 @@ public sealed class ClaudeRecipeGenerator : IRecipeGenerator
         // ArgumentList, never a joined string: inventory names and notes reach
         // this process from LAN-facing text boxes, and there is no shell here
         // to quote against.
-        foreach (var argument in new[]
-                 {
-                     "-p",
-                     "--model", _options.Model,
-                     "--effort", _options.Effort,
-                     "--system-prompt", SystemPrompt,
-                     "--json-schema", ResponseSchema,
-                     // No agent loop: one round trip is the whole job.
-                     "--tools", "",
-                     // Keeps CLAUDE.md/AGENTS.md out of every generation.
-                     "--setting-sources", "",
-                     // Never attach this app's own MCP server to a call this app
-                     // is making — that would be circular.
-                     "--strict-mcp-config",
-                     // One session file per generation would be litter.
-                     "--no-session-persistence",
-                     "--disable-slash-commands",
-                 })
+        foreach (var argument in CliArguments(model))
         {
             startInfo.ArgumentList.Add(argument);
         }

@@ -6,24 +6,38 @@ using Microsoft.Extensions.Options;
 namespace MealPlanner.Services;
 
 /// <summary>
-/// Classifies ingredients by shelling out to the headless <c>claude</c> CLI.
+/// Classifies ingredients with whichever provider and model the household chose
+/// on <c>/settings</c> — by default the headless <c>claude</c> CLI.
 /// <para>
-/// The CLI rather than the Anthropic SDK because this machine has no
-/// ANTHROPIC_API_KEY: the CLI is already authenticated, so the household gets
-/// the feature without anyone provisioning an API key. It is also the same
-/// route the planned chat page takes (see docs/plans/).
+/// The CLI is the default because it needs no API key: it is already
+/// authenticated with the household's subscription. Any other provider goes
+/// through an <see cref="IApiModelClient"/>. The name predates that and stays
+/// to keep this class's long paper trail findable. The prompt, the schema and
+/// <see cref="ParseResults"/> are the same whoever answers.
 /// </para>
 /// </summary>
 public sealed class ClaudeIngredientClassifier : IIngredientClassifier
 {
+    /// <summary>
+    /// Generous for 20 enum values: a reasoning model's thinking counts against
+    /// this cap on OpenAI, and a cut-off answer is a failed batch.
+    /// </summary>
+    private const int MaxOutputTokens = 8000;
+
     private readonly CategorizationOptions _options;
+    private readonly AiSettingsService _settings;
+    private readonly IEnumerable<IApiModelClient> _apiClients;
     private readonly ILogger<ClaudeIngredientClassifier> _logger;
 
     public ClaudeIngredientClassifier(
         IOptions<CategorizationOptions> options,
+        AiSettingsService settings,
+        IEnumerable<IApiModelClient> apiClients,
         ILogger<ClaudeIngredientClassifier> logger)
     {
         _options = options.Value;
+        _settings = settings;
+        _apiClients = apiClients;
         _logger = logger;
     }
 
@@ -138,7 +152,18 @@ public sealed class ClaudeIngredientClassifier : IIngredientClassifier
         try
         {
             var stopwatch = Stopwatch.StartNew();
-            var output = await RunAsync(payload, ct);
+
+            // Read per call, inside the try: a save on /settings applies from
+            // the next batch, and a settings read that fails is one more way
+            // for items to stay in Other rather than a faulted categorizer.
+            var model = await _settings.ResolveAsync(AiFeature.Categorization, ct);
+            var output = model.Provider == AiProvider.ClaudeCli
+                ? await RunAsync(payload, model, ct)
+                : await ApiModelClients.For(_apiClients, model.Provider).CompleteJsonAsync(
+                    new ModelCall(
+                        SystemPrompt, ResponseSchema, payload, null,
+                        MaxOutputTokens, TimeSpan.FromSeconds(_options.TimeoutSeconds)),
+                    model, ct);
             var categories = ParseResults(output, requests.Count, out var problem);
 
             if (problem is not null)
@@ -151,8 +176,9 @@ public sealed class ClaudeIngredientClassifier : IIngredientClassifier
             // Counts only. Neither a name nor a note goes to the log — a note is
             // 500 characters of whatever someone typed.
             _logger.LogInformation(
-                "Classified {Classified}/{Requested} ingredient(s) in {ElapsedMs}ms",
-                categories.Count(c => c is not null), requests.Count, stopwatch.ElapsedMilliseconds);
+                "Classified {Classified}/{Requested} ingredient(s) with {Provider}/{Model} in {ElapsedMs}ms",
+                categories.Count(c => c is not null), requests.Count, model.Provider, model.Model,
+                stopwatch.ElapsedMilliseconds);
             return categories;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -162,15 +188,48 @@ public sealed class ClaudeIngredientClassifier : IIngredientClassifier
         }
         catch (Exception ex)
         {
-            // Anything at all — CLI missing, not authenticated, no network,
-            // timeout. Items simply stay in Other; nothing else breaks.
+            // Anything at all — CLI missing, not authenticated, no key stored,
+            // no network, a refusal, timeout. Items simply stay in Other;
+            // nothing else breaks.
             _logger.LogWarning(
                 ex, "Ingredient classification failed for {Count} ingredient(s)", requests.Count);
             return new IngredientCategory?[requests.Count];
         }
     }
 
-    private async Task<string> RunAsync(string payload, CancellationToken ct)
+    /// <summary>
+    /// The CLI's argv for one call. Split out so a test can see the household's
+    /// model and effort reach it without spawning anything — and see
+    /// <c>--effort</c> <em>omitted</em> for a null effort, since the pair takes no
+    /// empty value.
+    /// </summary>
+    internal static IReadOnlyList<string> CliArguments(ResolvedModel model)
+    {
+        var arguments = new List<string> { "-p", "--model", model.Model };
+        if (AiEffortSpelling.For(AiProvider.ClaudeCli, model.Effort) is { } effort)
+        {
+            arguments.AddRange(["--effort", effort]);
+        }
+
+        arguments.AddRange(
+        [
+            "--system-prompt", SystemPrompt,
+            "--json-schema", ResponseSchema,
+            // No agent loop: one round trip is the whole job.
+            "--tools", "",
+            // Keeps CLAUDE.md/AGENTS.md out of every classification.
+            "--setting-sources", "",
+            // Never attach this app's own MCP server to a call this app is
+            // making — that would be circular.
+            "--strict-mcp-config",
+            // One session file per ingredient would be litter.
+            "--no-session-persistence",
+            "--disable-slash-commands",
+        ]);
+        return arguments;
+    }
+
+    private async Task<string> RunAsync(string payload, ResolvedModel model, CancellationToken ct)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -190,24 +249,7 @@ public sealed class ClaudeIngredientClassifier : IIngredientClassifier
         // ArgumentList, never a joined string: ingredient names reach this
         // process from a LAN-facing text box, and there is no shell here to
         // quote against.
-        foreach (var argument in new[]
-                 {
-                     "-p",
-                     "--model", _options.Model,
-                     "--effort", _options.Effort,
-                     "--system-prompt", SystemPrompt,
-                     "--json-schema", ResponseSchema,
-                     // No agent loop: one round trip is the whole job.
-                     "--tools", "",
-                     // Keeps CLAUDE.md/AGENTS.md out of every classification.
-                     "--setting-sources", "",
-                     // Never attach this app's own MCP server to a call this app
-                     // is making — that would be circular.
-                     "--strict-mcp-config",
-                     // One session file per ingredient would be litter.
-                     "--no-session-persistence",
-                     "--disable-slash-commands",
-                 })
+        foreach (var argument in CliArguments(model))
         {
             startInfo.ArgumentList.Add(argument);
         }

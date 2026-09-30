@@ -540,6 +540,32 @@ public class ReceiptScanTests
         // role=alert, not a second role=status: the add form owns this page's
         // one status region.
         Assert.Equal("alert", cut.Find("div.scan-error").GetAttribute("role"));
+        // An answer with nothing on it may well be the photo.
+        Assert.Contains("flatter photo", cut.Find("div.scan-error").TextContent, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A call that never answered is not the photo's fault, and saying so sent
+    /// someone to re-photograph a receipt that a second scan read fine (the PR #38
+    /// review: one OpenRouter scan in three came back with no answer text).
+    /// </summary>
+    [Fact]
+    public async Task A_scan_that_got_no_answer_does_not_blame_the_photo()
+    {
+        await using var page = await PageHarness.CreateAsync();
+        page.Scanner.Result = [];
+        page.Scanner.Failed = true;
+        var cut = page.RenderInventory();
+
+        Upload(cut);
+
+        cut.WaitForAssertion(() => Assert.NotEmpty(cut.FindAll("div.scan-error")));
+        var message = cut.Find("div.scan-error").TextContent;
+        Assert.DoesNotContain("flatter photo", message, StringComparison.Ordinal);
+        Assert.Contains("not your photo", message, StringComparison.Ordinal);
+        Assert.Contains("again", message, StringComparison.Ordinal);
+        Assert.Equal("alert", cut.Find("div.scan-error").GetAttribute("role"));
+        Assert.Empty(cut.FindAll("li.scan-row"));
     }
 
     [Fact]

@@ -22,12 +22,19 @@ internal sealed class PageHarness : BunitContext
     private PageHarness(
         InventoryHarness inventory,
         FakeRecipeGenerator generator,
-        FakeReceiptScanner scanner)
+        FakeReceiptScanner scanner,
+        FakeOpenRouterCatalog catalog,
+        FakeApiKeyChecker keyChecker)
     {
         _inventory = inventory;
         Generator = generator;
         Scanner = scanner;
+        Catalog = catalog;
+        KeyChecker = keyChecker;
         Recipes = inventory.NewRecipeService();
+        // Handed the page's own option instances, so a test that changes a
+        // default before rendering changes what the service falls back to.
+        Settings = inventory.NewAiSettingsService(ClassifyOptions, RecipeOptions, ScanOptions);
 
         // Registered as singletons rather than scoped: a BunitContext resolves
         // each page from the same container, and sharing one InventoryService
@@ -38,7 +45,16 @@ internal sealed class PageHarness : BunitContext
         Services.AddSingleton<IRecipeGenerator>(generator);
         Services.AddSingleton(Options.Create(RecipeOptions));
         Services.AddSingleton<IReceiptScanner>(scanner);
+        // Faked for the same reason the other two are: the suite never reaches a
+        // provider, and OpenRouterCatalog's own tests cover the real one.
+        Services.AddSingleton<IOpenRouterCatalog>(catalog);
+        Services.AddSingleton<IApiKeyChecker>(keyChecker);
         Services.AddSingleton(Options.Create(ScanOptions));
+        Services.AddSingleton(Settings);
+        // Only Recipe and Scan options were registered before the settings page
+        // existed. Without this every Settings test dies at render with a DI
+        // error that reads like a page bug.
+        Services.AddSingleton(Options.Create(ClassifyOptions));
         Services.AddLogging();
     }
 
@@ -60,6 +76,12 @@ internal sealed class PageHarness : BunitContext
 
     public FakeReceiptScanner Scanner { get; }
 
+    /// <summary>What /settings gets back when it checks a typed model id.</summary>
+    public FakeOpenRouterCatalog Catalog { get; }
+
+    /// <summary>What /settings gets back when it asks whether a key is any good.</summary>
+    public FakeApiKeyChecker KeyChecker { get; }
+
     /// <summary>
     /// Mutable up until the page is rendered, so a test can switch recipe
     /// generation off before <c>Recipes</c> reads it.
@@ -68,6 +90,18 @@ internal sealed class PageHarness : BunitContext
 
     /// <inheritdoc cref="RecipeOptions"/>
     public ReceiptScanningOptions ScanOptions { get; } = new();
+
+    /// <inheritdoc cref="RecipeOptions"/>
+    public CategorizationOptions ClassifyOptions { get; } = new();
+
+    /// <summary>The same AiSettingsService the settings page injects.</summary>
+    public AiSettingsService Settings { get; }
+
+    /// <summary>
+    /// What the language picker reads out of localStorage. Settable before the
+    /// render; the plan below is registered lazily so a test can change it.
+    /// </summary>
+    public string StoredLanguage { get; set; } = "system";
 
     /// <summary>
     /// A second <see cref="InventoryService"/> over the same database and
@@ -80,7 +114,12 @@ internal sealed class PageHarness : BunitContext
     public Task<int> CountAsync() => _inventory.CountAsync();
 
     public static async Task<PageHarness> CreateAsync() =>
-        new(await InventoryHarness.CreateAsync(), new FakeRecipeGenerator(), new FakeReceiptScanner());
+        new(
+            await InventoryHarness.CreateAsync(),
+            new FakeRecipeGenerator(),
+            new FakeReceiptScanner(),
+            new FakeOpenRouterCatalog(),
+            new FakeApiKeyChecker());
 
     /// <summary>
     /// Renders the inventory page as the app hosts it.
@@ -96,6 +135,35 @@ internal sealed class PageHarness : BunitContext
 
     /// <inheritdoc cref="RenderInventory"/>
     public IRenderedComponent<Recipes> RenderRecipes() => Render<Recipes>();
+
+    /// <inheritdoc cref="RenderInventory"/>
+    public IRenderedComponent<Settings> RenderSettings()
+    {
+        // Planned here rather than in the constructor so StoredLanguage can be
+        // set first. Both plans must exist before the render: under Strict mode
+        // an unplanned call throws, and an un-resulted one never completes,
+        // which hangs the handler before Blazor re-renders it.
+        JSInterop.Setup<string>("mealPlannerLang.get").SetResult(StoredLanguage);
+        JSInterop.Setup<string>("mealPlannerTheme.get").SetResult("system");
+
+        // The matcher overload is required: the bare SetupVoid(identifier)
+        // matches only a call with *no* arguments, so every real invocation
+        // would fall through to Strict mode's exception. Which argument arrived
+        // is asserted at the call site instead.
+        JSInterop.SetupVoid("mealPlannerLang.set", _ => true).SetVoidResult();
+        JSInterop.SetupVoid("mealPlannerTheme.set", _ => true).SetVoidResult();
+
+        return Render<Settings>();
+    }
+
+    /// <summary>
+    /// A second settings service over the same file — another tab, or a
+    /// feature resolving its model. Even with no notifier, this is
+    /// how a test proves a write actually landed rather than reading back the
+    /// page's own in-memory drafts.
+    /// </summary>
+    public AiSettingsService OutOfCircuitSettings() =>
+        _inventory.NewAiSettingsService(ClassifyOptions, RecipeOptions, ScanOptions);
 
     protected override async ValueTask DisposeAsyncCore()
     {
@@ -154,7 +222,8 @@ internal sealed class FakeRecipeGenerator : IRecipeGenerator
 /// <summary>
 /// Stands in for <see cref="ClaudeReceiptScanner"/> without a subprocess.
 /// Keeps the real thing's contract, which is the part worth faking: it never
-/// throws, and an empty <see cref="Result"/> is how a failure arrives.
+/// throws, and an empty <see cref="Result"/> is how a failure arrives —
+/// with <see cref="Failed"/> set when the call itself never answered.
 /// </summary>
 internal sealed class FakeReceiptScanner : IReceiptScanner
 {
@@ -171,6 +240,9 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
     /// lines it wants and still exercise the warning.
     /// </summary>
     public string? Warning { get; set; }
+
+    /// <summary>What the real scanner reports when the call itself never answered.</summary>
+    public bool Failed { get; set; }
 
     public IReadOnlyList<ReceiptFile> Files
     {
@@ -197,6 +269,105 @@ internal sealed class FakeReceiptScanner : IReceiptScanner
             await Gate.Task.WaitAsync(ct);
         }
 
-        return new ScanResult(Result, Warning);
+        return new ScanResult(Result, Warning, Failed);
+    }
+}
+
+/// <summary>
+/// Stands in for <see cref="OpenRouterCatalog"/> without a network. The verdict is
+/// whatever a test sets; <see cref="OpenRouterCatalogTests"/> covers working the
+/// real one out from OpenRouter's answer.
+/// </summary>
+internal sealed class FakeOpenRouterCatalog : IOpenRouterCatalog
+{
+    private readonly List<string> _asked = [];
+
+    /// <summary>Returns a Listed, fully-capable verdict unless a test says otherwise.</summary>
+    public Func<string, ModelIdCheck> Answer { get; set; } = Listed;
+
+    public IReadOnlyList<string> Asked
+    {
+        get
+        {
+            lock (_asked)
+            {
+                return _asked.ToArray();
+            }
+        }
+    }
+
+    public static ModelIdCheck Listed(string id) =>
+        new(ModelIdVerdict.Listed, id, $"Fake: {id}", true, true, true, true, []);
+
+    public static ModelIdCheck NotListed(string id, params string[] suggestions) =>
+        new(ModelIdVerdict.NotListed, id, null, false, false, false, false, suggestions);
+
+    public Task<ModelIdCheck> CheckAsync(string? modelId, CancellationToken ct = default)
+    {
+        var id = modelId?.Trim() ?? string.Empty;
+        lock (_asked)
+        {
+            _asked.Add(id);
+        }
+
+        return Task.FromResult(id.Length == 0 ? ModelIdCheck.Blank : Answer(id));
+    }
+}
+
+/// <summary>
+/// Stands in for <see cref="ApiKeyChecker"/> without a network. The verdict is
+/// whatever a test sets; <see cref="ApiKeyCheckerTests"/> covers working the real one
+/// out from a provider's answer.
+/// <para>
+/// <b>It records that a key was asked about, never the key.</b> A fake that kept key
+/// material would become the leak the service is shaped to avoid, and would invite a
+/// page test to assert on a secret. Which key went out is a service question, answered
+/// through <see cref="FakeHttp"/> over there.
+/// </para>
+/// </summary>
+internal sealed class FakeApiKeyChecker : IApiKeyChecker
+{
+    private readonly List<(AiProvider Provider, bool Stored, bool HadKey)> _asked = [];
+
+    /// <summary>Returns Valid unless a test says otherwise.</summary>
+    public Func<AiProvider, ApiKeyCheck> Answer { get; set; } = ApiKeyCheck.Valid;
+
+    /// <summary>Set to hold a check open, so a test can see the in-flight state.</summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public IReadOnlyList<(AiProvider Provider, bool Stored, bool HadKey)> Asked
+    {
+        get
+        {
+            lock (_asked)
+            {
+                return _asked.ToArray();
+            }
+        }
+    }
+
+    public async Task<ApiKeyCheck> CheckKeyAsync(
+        AiProvider provider,
+        string? apiKey,
+        CancellationToken ct = default) =>
+        await AnswerAsync(provider, stored: false, !string.IsNullOrWhiteSpace(apiKey), ct);
+
+    public async Task<ApiKeyCheck> CheckStoredAsync(AiProvider provider, CancellationToken ct = default) =>
+        await AnswerAsync(provider, stored: true, hadKey: false, ct);
+
+    private async Task<ApiKeyCheck> AnswerAsync(AiProvider provider, bool stored, bool hadKey, CancellationToken ct)
+    {
+        lock (_asked)
+        {
+            _asked.Add((provider, stored, hadKey));
+        }
+
+        if (Gate is { } gate)
+        {
+            await gate.Task.WaitAsync(ct);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        return Answer(provider);
     }
 }

@@ -6,8 +6,11 @@
     </div>
 
     <main>
+        @* ThemeToggle used to sit here. It moved onto /settings, where the
+           language picker lives, so the app has one home for preferences. The
+           trade is that the theme is two clicks away instead of always visible;
+           .top-row's justify-content: flex-end handles the lone link. *@
         <div class="top-row px-4">
-            <ThemeToggle />
             <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
         </div>
 
